@@ -2,16 +2,16 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import os
 
 # Configuración de la página
-st.set_page_config(page_title="ERP Montacargas - Control Financiero", layout="wide")
+st.set_page_config(page_title="ERP LMontacargas - Control Financiero", layout="wide")
 
-# Inicializar Base de Datos con tablas robustas
+# Inicializar Base de Datos
 def init_db():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
     
-    # Tabla de Trabajos (Ingresos / Operaciones)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trabajos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +50,6 @@ def init_db():
         )
     ''')
     
-    # Tabla de Gastos con Trazabilidad (Trabajo Relacionado)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS gastos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +70,6 @@ def init_db():
         )
     ''')
     
-    # Tabla de Configuración (Capital Inicial)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS config (
             clave TEXT PRIMARY KEY,
@@ -84,7 +82,6 @@ def init_db():
 
 init_db()
 
-# Obtener o establecer Capital Inicial
 def get_capital_inicial():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
@@ -100,8 +97,18 @@ def set_capital_inicial(monto):
     conn.commit()
     conn.close()
 
-# Título Principal
-st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas y Finanzas")
+# Encabezado con Logo y Título
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=120)
+    elif os.path.exists("logo.jpg"):
+        st.image("logo.jpg", width=120)
+    else:
+        st.write("📌 [Sube logo.png]")
+
+with col_title:
+    st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
 
 # Pestañas principales
 tab_dash, tab_trabajos, tab_gastos, tab_config = st.tabs([
@@ -122,7 +129,6 @@ with tab_dash:
     df_g = pd.read_sql_query("SELECT * FROM gastos", conn)
     conn.close()
     
-    # Selector de Mes y Año
     col_m1, col_m2 = st.columns(2)
     anos_disponibles = [str(datetime.now().year)]
     if not df_t.empty:
@@ -134,7 +140,6 @@ with tab_dash:
                      "07 - Julio", "08 - Agosto", "09 - Septiembre", "10 - Octubre", "11 - Noviembre", "12 - Diciembre"]
     mes_sel = col_m2.selectbox("Seleccionar Mes", meses_nombres)
     
-    # Filtrar datos por mes/año seleccionado
     df_t_f = df_t.copy()
     df_g_f = df_g.copy()
     
@@ -152,35 +157,22 @@ with tab_dash:
             num_mes = int(mes_sel.split(" - ")[0])
             df_g_f = df_g_f[df_g_f['dt'].dt.month == num_mes]
 
-    # Cálculos clave
     num_trabajos_mes = len(df_t_f)
     facturado_mes = df_t_f['total'].sum() if not df_t_f.empty else 0.0
     num_facturas = df_t_f[df_t_f['factura'].notna() & (df_t_f['factura'] != '')].shape[0] if not df_t_f.empty else 0
     
     cobrado_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
     pendiente_mes = df_t_f[df_t_f['estado_pago'] != 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
-    pendiente_total = df[df['estado_pago'] != 'Pagado']['total'].sum() if 'df' in locals() and not df.empty else (df_t['total'][df_t['estado_pago'] != 'Pagado'].sum() if not df_t.empty else 0.0)
     
     costo_fiscal_mes = df_t_f['costo_fiscal'].sum() if not df_t_f.empty else 0.0
-    iva_mes = df_t_f['iva'].sum() if not df_t_f.empty else 0.0
     gastos_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
     
     utilidad_mes = facturado_mes - gastos_mes
     comp_3_mes = utilidad_mes * 0.03
     
-    # Facturación y Gastos por Socio (Angel Llanez vs Adolfo Montalvo)
     fac_angel = df_t_f[df_t_f['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty else 0.0
     fac_montalvo = df_t_f[df_t_f['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_t_f.empty else 0.0
     
-    gastos_angel = df_g_f[df_g_f['proveedor'].str.contains('Angel', case=False, na=False)]['total'].sum() if not df_g_f.empty else 0.0
-    gastos_montalvo = df_g_f[df_g_f['proveedor'].str.contains('Montalvo', case=False, na=False)]['total'].sum() if not df_g_f.empty else 0.0
-    
-    ingreso_neto_al = df_t_f[df_t_f['cuenta_deposito'] == 'Cuenta Llanez']['ingreso_neto'].sum() if not df_t_f.empty else 0.0
-    ingreso_neto_am = df_t_f[df_t_f['cuenta_deposito'] == 'Cuenta Montalvo']['ingreso_neto'].sum() if not df_t_f.empty else 0.0
-    
-    capital_inicial = get_capital_inicial()
-    
-    # Mostrar tarjetas de indicadores estilo tu tablero original
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     c2.metric("Facturado", f"${facturado_mes:,.2f}", f"{num_facturas} Facturas")
@@ -189,15 +181,13 @@ with tab_dash:
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
     
     c6, c7, c8, c9, c10 = st.columns(5)
-    c6.metric("Ingreso Neto (AL)", f"${ingreso_neto_al:,.2f}")
-    c7.metric("Ingreso Neto (AM)", f"${ingreso_neto_am:,.2f}")
+    c6.metric("Facturado (AL)", f"${fac_angel:,.2f}")
+    c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}")
     c8.metric("Gastos del Mes", f"${gastos_mes:,.2f}")
     c9.metric("Utilidad del Mes", f"${utilidad_mes:,.2f}")
     c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
     
     st.markdown("---")
-    
-    # Gráficas analíticas
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("📈 Ingresos vs Gastos del Mes")
@@ -224,48 +214,46 @@ with tab_dash:
 with tab_trabajos:
     st.header("💼 Gestión de Trabajos y Operaciones")
     
-    with st.expander("➕ Registrar Nuevo Trabajo (Desplegar Formulario)", expanded=False):
+    # Botón de Descarga Excel para Trabajos
+    if not df_t.empty:
+        archivo_t = "Resguardo_Trabajos.xlsx"
+        df_t.to_excel(archivo_t, index=False)
+        with open(archivo_t, "rb") as f:
+            st.download_button("📥 Descargar Resguardo de Trabajos a Excel", f, file_name="Trabajos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with st.expander("➕ Registrar Nuevo Trabajo", expanded=False):
         with st.form("form_trabajo"):
             tc1, tc2, tc3, tc4 = st.columns(4)
-            
             with tc1:
                 fecha_t = st.date_input("Fecha", value=datetime.today())
                 cliente = st.text_input("Cliente")
                 equipo = st.text_input("Equipo")
                 modelo = st.text_input("Modelo")
                 serie = st.text_input("Serie")
-                
             with tc2:
                 categoria = st.selectbox("Categoría", ["Mantenimiento", "Venta", "Renta", "Refacción", "Servicio Correctivo", "Servicio Preventivo"])
                 subcategoria = st.text_input("Subcategoría")
                 descripcion = st.text_area("Descripción del Trabajo")
                 recibo_corr = st.text_input("Recibo Correctivo")
                 recibo_prev = st.text_input("Recibo Preventivo")
-                
             with tc3:
                 estado_trabajo = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado"])
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
                 cotizacion = st.text_input("Cotización")
                 fecha_cot = st.date_input("Fecha Cotización", value=datetime.today())
-                oc = st.text_input("O.C. (Orden de Compra)")
+                oc = st.text_input("O.C.")
                 fecha_oc = st.date_input("Fecha O.C.", value=datetime.today())
-                
             with tc4:
                 factura = st.text_input("Factura")
                 facturado_por = st.selectbox("Facturado Por", ["Angel Llanez", "Adolfo Montalvo", "Externo"])
                 subtotal = st.number_input("Subtotal ($)", min_value=0.0, step=0.01)
                 iva = subtotal * 0.16
                 total = subtotal + iva
-                st.text(f"IVA (16%): ${iva:,.2f}")
-                st.text(f"Total: ${total:,.2f}")
-                
                 cuenta_dep = st.selectbox("Cuenta donde se depositó", ["Cuenta Llanez", "Cuenta Montalvo", "Efectivo", "Cansino"])
                 estado_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"])
                 portal = st.selectbox("Portal", ["Sí", "No", "Pendiente de Subir"])
 
-            btn_guardar_t = st.form_submit_button("Guardar Trabajo en el Sistema")
-            
-            if btn_guardar_t:
+            if st.form_submit_button("Guardar Trabajo en el Sistema"):
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -278,13 +266,9 @@ with tab_trabajos:
                 st.rerun()
 
     st.markdown("---")
-    st.subheader("📋 Historial y Modificación de Trabajos")
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_trabajos = pd.read_sql_query("SELECT * FROM trabajos ORDER BY id DESC", conn)
-    conn.close()
-    
-    if not df_trabajos.empty:
-        st.dataframe(df_trabajos, use_container_width=True)
+    st.subheader("📋 Historial de Trabajos")
+    if not df_t.empty:
+        st.dataframe(df_t, use_container_width=True)
     else:
         st.info("No hay trabajos registrados todavía.")
 
@@ -294,42 +278,41 @@ with tab_trabajos:
 with tab_gastos:
     st.header("💸 Gastos y Trazabilidad por Trabajo")
     
+    # Botón de Descarga Excel para Gastos
+    if not df_g.empty:
+        archivo_g = "Resguardo_Gastos.xlsx"
+        df_g.to_excel(archivo_g, index=False)
+        with open(archivo_g, "rb") as f:
+            st.download_button("📥 Descargar Resguardo de Gastos a Excel", f, file_name="Gastos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
     with st.expander("➕ Registrar Nuevo Gasto", expanded=False):
         with st.form("form_gasto"):
             gc1, gc2, gc3 = st.columns(3)
-            
             with gc1:
                 fecha_g = st.date_input("Fecha Gasto", value=datetime.today())
                 cliente_g = st.text_input("Cliente Relacionado")
                 equipo_g = st.text_input("Equipo Relacionado")
-                categoria_g = st.text_input("Categoría de Gasto (Refacción, Viáticos, etc.)")
-                
+                categoria_g = st.text_input("Categoría de Gasto")
             with gc2:
                 subcategoria_g = st.text_input("Subcategoría")
                 proveedor_g = st.text_input("Proveedor")
                 
-                # Obtener lista de trabajos para relacionar ID
                 conn = sqlite3.connect('erp_montacargas.db')
                 t_list = pd.read_sql_query("SELECT id, cliente, equipo FROM trabajos", conn)
                 conn.close()
                 trabajos_opciones = ["Ninguno"] + [f"ID {r['id']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
-                
                 trabajo_rel = st.selectbox("Trabajo Relacionado (Trazabilidad)", trabajos_opciones)
-                
             with gc3:
                 folio_ticket = st.text_input("Folio de Ticket o Factura")
                 metodo_pago = st.selectbox("Método de Pago", ["Transferencia", "Efectivo", "Tarjeta"])
-                cuenta_g = st.selectbox("Cuenta", ["Cuenta Llanez", "Cuenta Montalvo", "Efectivo"])
+                cuenta_g = st.selectbox("Cuenta Gasto", ["Cuenta Llanez", "Cuenta Montalvo", "Efectivo"])
                 sub_g = st.number_input("Subtotal Gasto ($)", min_value=0.0, step=0.01)
                 iva_g = sub_g * 0.16
                 tot_g = sub_g + iva_g
-                st.text(f"Total Gasto con IVA: ${tot_g:,.2f}")
-                
+
             desc_g = st.text_area("Descripción / Detalle del Gasto")
             
-            btn_guardar_g = st.form_submit_button("Guardar Gasto")
-            
-            if btn_guardar_g:
+            if st.form_submit_button("Guardar Gasto"):
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -343,12 +326,8 @@ with tab_gastos:
 
     st.markdown("---")
     st.subheader("📊 Historial de Gastos")
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_gastos = pd.read_sql_query("SELECT * FROM gastos ORDER BY id DESC", conn)
-    conn.close()
-    
-    if not df_gastos.empty:
-        st.dataframe(df_gastos, use_container_width=True)
+    if not df_g.empty:
+        st.dataframe(df_g, use_container_width=True)
     else:
         st.info("No hay gastos registrados todavía.")
 
