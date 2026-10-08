@@ -145,9 +145,15 @@ with tab_dash:
         anos_disponibles = sorted(list(set([str(y) for y in anos_t] + [str(datetime.now().year)])))
         
     anio_sel = col_m1.selectbox("Seleccionar Año", anos_disponibles, index=len(anos_disponibles)-1)
+    
     meses_nombres = ["Todos", "01 - Enero", "02 - Febrero", "03 - Marzo", "04 - Abril", "05 - Mayo", "06 - Junio", 
                      "07 - Julio", "08 - Agosto", "09 - Septiembre", "10 - Octubre", "11 - Noviembre", "12 - Diciembre"]
-    mes_sel = col_m2.selectbox("Seleccionar Mes", meses_nombres)
+    
+    # Calcular el mes actual por defecto (ej. mes 10 -> index correspondiente)
+    mes_actual_num = datetime.now().month
+    indice_mes_default = mes_actual_num # porque "Todos" es el índice 0, y Enero es 1, etc.
+    
+    mes_sel = col_m2.selectbox("Seleccionar Mes", meses_nombres, index=indice_mes_default)
     
     df_t_f = df_t.copy()
     df_g_f = df_g.copy()
@@ -283,17 +289,36 @@ with tab_trabajos:
                 st.success(f"¡Trabajo registrado con éxito! ID asignado: {id_gen}")
                 st.rerun()
 
-    # Sección para Editar o Eliminar Trabajos
+    # Sección para Editar o Eliminar Trabajos (Ahora maneja IDs personalizados o registros anteriores)
     if not df_t.empty:
-        with st.expander("✏️ Editar o 🗑️ Borrar Trabajo Existente", expanded=False):
-            id_a_editar = st.selectbox("Selecciona el ID del Trabajo a Editar/Borrar", df_t['id_personalizado'].tolist())
+        # Filtrar solo los que tienen id_personalizado o mostrar todos
+        lista_ids = [str(x) for x in df_t['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
+        if not lista_ids:
+            # Si hay registros viejos sin id_personalizado, les asignamos uno temporalmente en pantalla para poder editarlos
+            df_t['id_personalizado'] = df_t['id_personalizado'].fillna("antiguo_" + df_t.index.astype(str))
+            lista_ids = df_t['id_personalizado'].tolist()
+
+        with st.expander("✏️ Editar o 🗑️ Borrar Trabajo Existente", expanded=True):
+            id_a_editar = st.selectbox("Selecciona el ID del Trabajo a Editar/Borrar", lista_ids)
             registro_actual = df_t[df_t['id_personalizado'] == id_a_editar].iloc[0]
             
             with st.form("form_editar_trabajo"):
                 st.write(f"Editando Registro: **{id_a_editar}**")
-                nuevo_estatus_t = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado"], index=["Pendiente", "En Proceso", "Terminado", "Entregado"].index(registro_actual['estado_trabajo']) if registro_actual['estado_trabajo'] in ["Pendiente", "En Proceso", "Terminado", "Entregado"] else 0)
-                nuevo_estatus_p = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"], index=["Pendiente", "Pagado", "Parcial"].index(registro_actual['estado_pago']) if registro_actual['estado_pago'] in ["Pendiente", "Pagado", "Parcial"] else 0)
-                nuevo_subtotal = st.number_input("Subtotal ($)", value=float(registro_actual['subtotal']), step=0.01)
+                
+                # Manejar índices seguros para selectbox
+                estados_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado"]
+                val_t = registro_actual['estado_trabajo']
+                idx_t = estados_t_opts.index(val_t) if val_t in estados_t_opts else 0
+                
+                estados_p_opts = ["Pendiente", "Pagado", "Parcial"]
+                val_p = registro_actual['estado_pago']
+                idx_p = estados_p_opts.index(val_p) if val_p in estados_p_opts else 0
+
+                nuevo_estatus_t = st.selectbox("Estado de Trabajo", estados_t_opts, index=idx_t)
+                nuevo_estatus_p = st.selectbox("Estado de Pago", estados_p_opts, index=idx_p)
+                
+                sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
+                nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
                 
                 col_btn1, col_btn2 = st.columns(2)
                 actualizar = col_btn1.form_submit_button("💾 Guardar Cambios")
@@ -304,6 +329,8 @@ with tab_trabajos:
                     nuevo_total = nuevo_subtotal + nuevo_iva
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
+                    
+                    # Actualizar por id_personalizado real
                     cursor.execute('''
                         UPDATE trabajos SET estado_trabajo = ?, estado_pago = ?, subtotal = ?, iva = ?, total = ?
                         WHERE id_personalizado = ?
@@ -390,13 +417,19 @@ with tab_gastos:
 
     # Sección para Editar o Eliminar Gastos
     if not df_g.empty:
+        lista_ids_g = [str(x) for x in df_g['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
+        if not lista_ids_g:
+            df_g['id_personalizado'] = df_g['id_personalizado'].fillna("antiguo_" + df_g.index.astype(str))
+            lista_ids_g = df_g['id_personalizado'].tolist()
+
         with st.expander("✏️ Editar o 🗑️ Borrar Gasto Existente", expanded=False):
-            id_g_editar = st.selectbox("Selecciona el ID del Gasto a Editar/Borrar", df_g['id_personalizado'].tolist())
+            id_g_editar = st.selectbox("Selecciona el ID del Gasto a Editar/Borrar", lista_ids_g)
             gasto_actual = df_g[df_g['id_personalizado'] == id_g_editar].iloc[0]
             
             with st.form("form_editar_gasto"):
                 st.write(f"Editando Gasto: **{id_g_editar}**")
-                nuevo_sub_g = st.number_input("Subtotal Gasto ($)", value=float(gasto_actual['subtotal']), step=0.01)
+                sub_g_ant = float(gasto_actual['subtotal']) if pd.notna(gasto_actual['subtotal']) else 0.0
+                nuevo_sub_g = st.number_input("Subtotal Gasto ($)", value=sub_g_ant, step=0.01)
                 
                 col_g_btn1, col_g_btn2 = st.columns(2)
                 actualizar_g = col_g_btn1.form_submit_button("💾 Guardar Cambios Gasto")
