@@ -7,7 +7,6 @@ import os
 # Configuración de la página
 st.set_page_config(page_title="ERP Montacargas - Control Financiero", layout="wide")
 
-# Inicializar Base de Datos con IDs personalizados
 def init_db():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
@@ -82,24 +81,16 @@ def init_db():
 
 init_db()
 
-# Función para generar ID automático (ej: TR_18092026_001 o GA_18092026_001)
 def generar_id(tipo_prefijo, fecha_str):
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
-    
-    # Formatear fecha a DDMMAAAA para el ID
     dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
     fecha_formateada = dt_obj.strftime("%d%m%Y")
-    
-    tabla = "trabajos" if tipo_prefijo == "TR" else "gastos"
-    
-    # Contar cuántos registros hay en esa fecha
+    tabla = "trabajos" if tipo_prefijo == "tr" else "gastos"
     cursor.execute(f"SELECT COUNT(*) FROM {tabla} WHERE fecha = ?", (fecha_str,))
     count = cursor.fetchone()[0]
     conn.close()
-    
-    siguiente_num = count + 1
-    return f"{tipo_prefijo}_{fecha_formateada}_{siguiente_num:03d}"
+    return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
 
 def get_capital_inicial():
     conn = sqlite3.connect('erp_montacargas.db')
@@ -129,7 +120,6 @@ with col_logo:
 with col_title:
     st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
 
-# Pestañas principales
 tab_dash, tab_trabajos, tab_gastos, tab_config = st.tabs([
     "📊 Dashboard e Indicadores", 
     "💼 Trabajos y Operaciones", 
@@ -182,10 +172,8 @@ with tab_dash:
     
     cobrado_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
     pendiente_mes = df_t_f[df_t_f['estado_pago'] != 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
-    
     costo_fiscal_mes = df_t_f['costo_fiscal'].sum() if not df_t_f.empty else 0.0
     
-    # CORRECCIÓN: Utilidad calculada con SUBTOTAL (sin IVA) menos Gastos (sin IVA o totales según convenga, usaremos subtotal de trabajos vs subtotal de gastos para utilidad real sin IVA)
     subtotal_trabajos_mes = df_t_f['subtotal'].sum() if not df_t_f.empty else 0.0
     subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
     gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
@@ -247,6 +235,7 @@ with tab_trabajos:
         with open(archivo_t, "rb") as f:
             st.download_button("📥 Descargar Resguardo de Trabajos a Excel", f, file_name="Trabajos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+    # Registrar Nuevo Trabajo
     with st.expander("➕ Registrar Nuevo Trabajo", expanded=False):
         with st.form("form_trabajo"):
             tc1, tc2, tc3, tc4 = st.columns(4)
@@ -281,7 +270,7 @@ with tab_trabajos:
 
             if st.form_submit_button("Guardar Trabajo en el Sistema"):
                 fecha_str = str(fecha_t)
-                id_gen = generar_id("TR", fecha_str)
+                id_gen = generar_id("tr", fecha_str)
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
@@ -293,6 +282,45 @@ with tab_trabajos:
                 conn.close()
                 st.success(f"¡Trabajo registrado con éxito! ID asignado: {id_gen}")
                 st.rerun()
+
+    # Sección para Editar o Eliminar Trabajos
+    if not df_t.empty:
+        with st.expander("✏️ Editar o 🗑️ Borrar Trabajo Existente", expanded=False):
+            id_a_editar = st.selectbox("Selecciona el ID del Trabajo a Editar/Borrar", df_t['id_personalizado'].tolist())
+            registro_actual = df_t[df_t['id_personalizado'] == id_a_editar].iloc[0]
+            
+            with st.form("form_editar_trabajo"):
+                st.write(f"Editando Registro: **{id_a_editar}**")
+                nuevo_estatus_t = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado"], index=["Pendiente", "En Proceso", "Terminado", "Entregado"].index(registro_actual['estado_trabajo']) if registro_actual['estado_trabajo'] in ["Pendiente", "En Proceso", "Terminado", "Entregado"] else 0)
+                nuevo_estatus_p = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"], index=["Pendiente", "Pagado", "Parcial"].index(registro_actual['estado_pago']) if registro_actual['estado_pago'] in ["Pendiente", "Pagado", "Parcial"] else 0)
+                nuevo_subtotal = st.number_input("Subtotal ($)", value=float(registro_actual['subtotal']), step=0.01)
+                
+                col_btn1, col_btn2 = st.columns(2)
+                actualizar = col_btn1.form_submit_button("💾 Guardar Cambios")
+                eliminar = col_btn2.form_submit_button("🗑️ Eliminar Trabajo")
+                
+                if actualizar:
+                    nuevo_iva = nuevo_subtotal * 0.16
+                    nuevo_total = nuevo_subtotal + nuevo_iva
+                    conn = sqlite3.connect('erp_montacargas.db')
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE trabajos SET estado_trabajo = ?, estado_pago = ?, subtotal = ?, iva = ?, total = ?
+                        WHERE id_personalizado = ?
+                    ''', (nuevo_estatus_t, nuevo_estatus_p, nuevo_subtotal, nuevo_iva, nuevo_total, id_a_editar))
+                    conn.commit()
+                    conn.close()
+                    st.success("¡Trabajo actualizado con éxito!")
+                    st.rerun()
+                    
+                if eliminar:
+                    conn = sqlite3.connect('erp_montacargas.db')
+                    cursor = conn.cursor()
+                    cursor.execute('DELETE FROM trabajos WHERE id_personalizado = ?', (id_a_editar,))
+                    conn.commit()
+                    conn.close()
+                    st.warning(f"Trabajo {id_a_editar} eliminado.")
+                    st.rerun()
 
     st.markdown("---")
     st.subheader("📋 Historial de Trabajos")
@@ -317,6 +345,7 @@ with tab_gastos:
         with open(archivo_g, "rb") as f:
             st.download_button("📥 Descargar Resguardo de Gastos a Excel", f, file_name="Gastos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+    # Registrar Nuevo Gasto
     with st.expander("➕ Registrar Nuevo Gasto", expanded=False):
         with st.form("form_gasto"):
             gc1, gc2, gc3 = st.columns(3)
@@ -346,7 +375,7 @@ with tab_gastos:
             
             if st.form_submit_button("Guardar Gasto"):
                 fecha_str = str(fecha_g)
-                id_gen_g = generar_id("GA", fecha_str)
+                id_gen_g = generar_id("ga", fecha_str)
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
@@ -358,6 +387,43 @@ with tab_gastos:
                 conn.close()
                 st.success(f"¡Gasto registrado con éxito! ID asignado: {id_gen_g}")
                 st.rerun()
+
+    # Sección para Editar o Eliminar Gastos
+    if not df_g.empty:
+        with st.expander("✏️ Editar o 🗑️ Borrar Gasto Existente", expanded=False):
+            id_g_editar = st.selectbox("Selecciona el ID del Gasto a Editar/Borrar", df_g['id_personalizado'].tolist())
+            gasto_actual = df_g[df_g['id_personalizado'] == id_g_editar].iloc[0]
+            
+            with st.form("form_editar_gasto"):
+                st.write(f"Editando Gasto: **{id_g_editar}**")
+                nuevo_sub_g = st.number_input("Subtotal Gasto ($)", value=float(gasto_actual['subtotal']), step=0.01)
+                
+                col_g_btn1, col_g_btn2 = st.columns(2)
+                actualizar_g = col_g_btn1.form_submit_button("💾 Guardar Cambios Gasto")
+                eliminar_g = col_g_btn2.form_submit_button("🗑️ Eliminar Gasto")
+                
+                if actualizar_g:
+                    nuevo_iva_g = nuevo_sub_g * 0.16
+                    nuevo_total_g = nuevo_sub_g + nuevo_iva_g
+                    conn = sqlite3.connect('erp_montacargas.db')
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE gastos SET subtotal = ?, iva = ?, total = ?
+                        WHERE id_personalizado = ?
+                    ''', (nuevo_sub_g, nuevo_iva_g, nuevo_total_g, id_g_editar))
+                    conn.commit()
+                    conn.close()
+                    st.success("¡Gasto actualizado con éxito!")
+                    st.rerun()
+                    
+                if eliminar_g:
+                    conn = sqlite3.connect('erp_montacargas.db')
+                    cursor = conn.cursor()
+                    cursor.execute('DELETE FROM gastos WHERE id_personalizado = ?', (id_g_editar,))
+                    conn.commit()
+                    conn.close()
+                    st.warning(f"Gasto {id_g_editar} eliminado.")
+                    st.rerun()
 
     st.markdown("---")
     st.subheader("📊 Historial de Gastos")
