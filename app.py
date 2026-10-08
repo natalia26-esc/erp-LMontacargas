@@ -5,16 +5,16 @@ from datetime import datetime
 import os
 
 # Configuración de la página
-st.set_page_config(page_title="ERP LMontacargas - Control Financiero", layout="wide")
+st.set_page_config(page_title="ERP Montacargas - Control Financiero", layout="wide")
 
-# Inicializar Base de Datos
+# Inicializar Base de Datos con IDs personalizados
 def init_db():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trabajos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_personalizado TEXT PRIMARY KEY,
             fecha TEXT NOT NULL,
             cliente TEXT NOT NULL,
             equipo TEXT,
@@ -52,7 +52,7 @@ def init_db():
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS gastos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_personalizado TEXT PRIMARY KEY,
             fecha TEXT NOT NULL,
             cliente TEXT,
             equipo TEXT,
@@ -82,6 +82,25 @@ def init_db():
 
 init_db()
 
+# Función para generar ID automático (ej: TR_18092026_001 o GA_18092026_001)
+def generar_id(tipo_prefijo, fecha_str):
+    conn = sqlite3.connect('erp_montacargas.db')
+    cursor = conn.cursor()
+    
+    # Formatear fecha a DDMMAAAA para el ID
+    dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
+    fecha_formateada = dt_obj.strftime("%d%m%Y")
+    
+    tabla = "trabajos" if tipo_prefijo == "TR" else "gastos"
+    
+    # Contar cuántos registros hay en esa fecha
+    cursor.execute(f"SELECT COUNT(*) FROM {tabla} WHERE fecha = ?", (fecha_str,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    
+    siguiente_num = count + 1
+    return f"{tipo_prefijo}_{fecha_formateada}_{siguiente_num:03d}"
+
 def get_capital_inicial():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
@@ -108,7 +127,7 @@ with col_logo:
         st.write("📌 [Sube logo.png]")
 
 with col_title:
-    st.title("🚜 ERP LMontacargas")
+    st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
 
 # Pestañas principales
 tab_dash, tab_trabajos, tab_gastos, tab_config = st.tabs([
@@ -165,9 +184,13 @@ with tab_dash:
     pendiente_mes = df_t_f[df_t_f['estado_pago'] != 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
     
     costo_fiscal_mes = df_t_f['costo_fiscal'].sum() if not df_t_f.empty else 0.0
-    gastos_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
     
-    utilidad_mes = facturado_mes - gastos_mes
+    # CORRECCIÓN: Utilidad calculada con SUBTOTAL (sin IVA) menos Gastos (sin IVA o totales según convenga, usaremos subtotal de trabajos vs subtotal de gastos para utilidad real sin IVA)
+    subtotal_trabajos_mes = df_t_f['subtotal'].sum() if not df_t_f.empty else 0.0
+    subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
+    gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
+    
+    utilidad_mes = subtotal_trabajos_mes - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03
     
     fac_angel = df_t_f[df_t_f['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty else 0.0
@@ -183,8 +206,8 @@ with tab_dash:
     c6, c7, c8, c9, c10 = st.columns(5)
     c6.metric("Facturado (AL)", f"${fac_angel:,.2f}")
     c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}")
-    c8.metric("Gastos del Mes", f"${gastos_mes:,.2f}")
-    c9.metric("Utilidad del Mes", f"${utilidad_mes:,.2f}")
+    c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
+    c9.metric("Utilidad (Sin IVA)", f"${utilidad_mes:,.2f}")
     c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
     
     st.markdown("---")
@@ -193,8 +216,8 @@ with tab_dash:
         st.subheader("📈 Ingresos vs Gastos del Mes")
         if not df_t_f.empty or not df_g_f.empty:
             df_bar = pd.DataFrame({
-                'Concepto': ['Ingresos / Facturado', 'Gastos', 'Utilidad'],
-                'Monto': [facturado_mes, gastos_mes, utilidad_mes]
+                'Concepto': ['Subtotal Ingresos', 'Subtotal Gastos', 'Utilidad (Sin IVA)'],
+                'Monto': [subtotal_trabajos_mes, subtotal_gastos_mes, utilidad_mes]
             })
             st.bar_chart(df_bar.set_index('Concepto'))
         else:
@@ -214,7 +237,10 @@ with tab_dash:
 with tab_trabajos:
     st.header("💼 Gestión de Trabajos y Operaciones")
     
-    # Botón de Descarga Excel para Trabajos
+    conn = sqlite3.connect('erp_montacargas.db')
+    df_t = pd.read_sql_query("SELECT * FROM trabajos", conn)
+    conn.close()
+    
     if not df_t.empty:
         archivo_t = "Resguardo_Trabajos.xlsx"
         df_t.to_excel(archivo_t, index=False)
@@ -254,15 +280,18 @@ with tab_trabajos:
                 portal = st.selectbox("Portal", ["Sí", "No", "Pendiente de Subir"])
 
             if st.form_submit_button("Guardar Trabajo en el Sistema"):
+                fecha_str = str(fecha_t)
+                id_gen = generar_id("TR", fecha_str)
+                
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO trabajos (fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, portal)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (str(fecha_t), cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, str(fecha_cot), oc, str(fecha_oc), factura, facturado_por, subtotal, iva, total, cuenta_dep, estado_pago, portal))
+                    INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, portal)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (id_gen, fecha_str, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, str(fecha_cot), oc, str(fecha_oc), factura, facturado_por, subtotal, iva, total, cuenta_dep, estado_pago, portal))
                 conn.commit()
                 conn.close()
-                st.success("¡Trabajo registrado con éxito!")
+                st.success(f"¡Trabajo registrado con éxito! ID asignado: {id_gen}")
                 st.rerun()
 
     st.markdown("---")
@@ -278,7 +307,10 @@ with tab_trabajos:
 with tab_gastos:
     st.header("💸 Gastos y Trazabilidad por Trabajo")
     
-    # Botón de Descarga Excel para Gastos
+    conn = sqlite3.connect('erp_montacargas.db')
+    df_g = pd.read_sql_query("SELECT * FROM gastos", conn)
+    conn.close()
+    
     if not df_g.empty:
         archivo_g = "Resguardo_Gastos.xlsx"
         df_g.to_excel(archivo_g, index=False)
@@ -298,9 +330,9 @@ with tab_gastos:
                 proveedor_g = st.text_input("Proveedor")
                 
                 conn = sqlite3.connect('erp_montacargas.db')
-                t_list = pd.read_sql_query("SELECT id, cliente, equipo FROM trabajos", conn)
+                t_list = pd.read_sql_query("SELECT id_personalizado, cliente, equipo FROM trabajos", conn)
                 conn.close()
-                trabajos_opciones = ["Ninguno"] + [f"ID {r['id']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
+                trabajos_opciones = ["Ninguno"] + [f"{r['id_personalizado']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
                 trabajo_rel = st.selectbox("Trabajo Relacionado (Trazabilidad)", trabajos_opciones)
             with gc3:
                 folio_ticket = st.text_input("Folio de Ticket o Factura")
@@ -313,15 +345,18 @@ with tab_gastos:
             desc_g = st.text_area("Descripción / Detalle del Gasto")
             
             if st.form_submit_button("Guardar Gasto"):
+                fecha_str = str(fecha_g)
+                id_gen_g = generar_id("GA", fecha_str)
+                
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO gastos (fecha, cliente, equipo, categoria, subcategoria, proveedor, trabajo_relacionado, descripcion, folio_ticket, metodo_pago, cuenta, subtotal, iva, total)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (str(fecha_g), cliente_g, equipo_g, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cuenta_g, sub_g, iva_g, tot_g))
+                    INSERT INTO gastos (id_personalizado, fecha, cliente, equipo, categoria, subcategoria, proveedor, trabajo_relacionado, descripcion, folio_ticket, metodo_pago, cuenta, subtotal, iva, total)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (id_gen_g, fecha_str, cliente_g, equipo_g, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cuenta_g, sub_g, iva_g, tot_g))
                 conn.commit()
                 conn.close()
-                st.success("¡Gasto registrado y vinculado con éxito!")
+                st.success(f"¡Gasto registrado con éxito! ID asignado: {id_gen_g}")
                 st.rerun()
 
     st.markdown("---")
