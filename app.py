@@ -108,7 +108,7 @@ with col_logo:
         st.write("📌 [Sube logo.png]")
 
 with col_title:
-    st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
+    st.title("🚜 ERP LMontacargas")
 
 # Pestañas principales
 tab_dash, tab_trabajos, tab_gastos, tab_config = st.tabs([
