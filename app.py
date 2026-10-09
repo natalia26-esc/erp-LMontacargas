@@ -432,7 +432,7 @@ with tab_trabajos:
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
@@ -720,6 +720,10 @@ with tab_config:
         "💳 Cuentas"
     ])
 
+    # Carga previa segura de clientes para catálogos
+    clients_df_tab = get_catalogo("cat_clientes")
+    clients_for_eq = clients_df_tab['nombre'].tolist() if not clients_df_tab.empty else ["General"]
+
     # 1. CLIENTES
     with sub_cat_tab1:
         st.subheader("Administrar Clientes")
@@ -739,7 +743,6 @@ with tab_config:
                         st.error("El cliente ya existe.")
         
         st.markdown("---")
-        clients_df_tab = get_catalogo("cat_clientes")
         if not clients_df_tab.empty:
             for _, row_c in clients_df_tab.iterrows():
                 cid, cname = row_c['id'], row_c['nombre']
@@ -767,7 +770,6 @@ with tab_config:
     # 2. EQUIPOS
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
-        clients_for_eq = clients_df['nombre'].tolist() if not clients_df.empty else ["General"]
         with st.form("add_eq", clear_on_submit=True):
             eq_eco = st.text_input("Número Económico (Ej. ECO-01)")
             eq_marca = st.text_input("Marca")
