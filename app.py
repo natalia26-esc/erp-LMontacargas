@@ -217,21 +217,24 @@ with tab_dash:
 
     num_trabajos_mes = len(df_t_f)
     
-    # Cotizado total
-    cotizado_mes = df_t_f['total'].sum() if not df_t_f.empty else 0.0
+    # 1. COTIZADO (Solo trabajos con estatus de cotización o N/A Cotización)
+    df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
+    cotizado_mes = df_cotizados_mes['total'].sum() if not df_cotizados_mes.empty else 0.0
 
-    # Facturado (con factura o estatus facturado/pagado)
+    # 2. FACTURADO (Trabajos con factura emitida o estatus Facturado/Pagado)
     df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
     facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
     num_facturas = df_facturados_mes.shape[0]
     
-    # Pagado / Cobrado real
+    # 3. PAGADO / COBRADO (Solo trabajos con estado de pago 'Pagado')
     df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
     cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
     
-    pendiente_mes = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]['total'].sum() if not df_t_f.empty else 0.0
+    # 4. PENDIENTE DE COBRO (Aprobados o facturados pero que aún no están pagados)
+    df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
+    pendiente_mes = df_pendientes_cobro['total'].sum() if not df_pendientes_cobro.empty else 0.0
     
-    # Costo fiscal y subtotal de ingresos reales
+    # 5. COSTO FISCAL Y SUBTOTAL DE INGRESOS REALES (Basado en los cobrados del mes)
     costo_fiscal_mes = 0.0
     subtotal_ingresos_reales = 0.0
     if not df_pagados_mes.empty:
@@ -244,22 +247,26 @@ with tab_dash:
     subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
     gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
     
+    # 6. UTILIDAD NETA DEL MES (Subtotal cobrado menos subtotal de gastos del mes)
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
-    # Desglose por Socio (Facturación)
+    # Facturación por Socio en el mes
     fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_facturados_mes.empty else 0.0
     fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_facturados_mes.empty else 0.0
     
-    # Desglose por Socio (Ingresado / Depositado en sus cuentas específicas)
-    ing_angel_cuenta = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cuenta Llanez']['total'].sum() if not df_pagados_mes.empty else 0.0
-    ing_montalvo_cuenta = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cuenta Montalvo']['total'].sum() if not df_pagados_mes.empty else 0.0
-    ing_cansino = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cansino']['total'].sum() if not df_pagados_mes.empty else 0.0
+    # Ingresos por Socio (según la cuenta de depósito real de los pagados)
+    df_todos_pagados = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
+    ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
+    ing_montalvo_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Montalvo']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
+    ing_cansino = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cansino']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
     
+    # CAPITAL TOTAL ACTUAL (Capital Inicial + Utilidad Neta Histórica global de todos los pagados menos gastos históricos)
     capital_inicial = get_capital_inicial()
-    total_cobrado_historico = df_t[df_t['estado_pago'] == 'Pagado']['total'].sum() if not df_t.empty else 0.0
-    total_gastos_historico = df_g['total'].sum() if not df_g.empty else 0.0
-    capital_total_actual = capital_inicial + total_cobrado_historico - total_gastos_historico
+    subtotal_hist_pagados = df_todos_pagados['subtotal'].sum() if not df_todos_pagados.empty else 0.0
+    subtotal_hist_gastos = df_g['subtotal'].sum() if not df_g.empty else 0.0
+    utilidad_historica_global = subtotal_hist_pagados - subtotal_hist_gastos
+    capital_total_actual = capital_inicial + utilidad_historica_global
     
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Cotizado (Total)", f"${cotizado_mes:,.2f}")
@@ -270,14 +277,14 @@ with tab_dash:
     
     c6, c7, c8, c9, c10 = st.columns(5)
     c6.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
-    c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}", f"AL: ${fac_angel:,.2f}")
-    c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
-    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
-    c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    c7.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
+    c8.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
+    c9.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    c10.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     
     st.markdown("---")
     
-    # Sección de Métricas Detalladas por Socio (Facturación e Ingresos en Cuentas)
+    # Sección de Control y Rendimiento por Socio
     st.subheader("👥 Control y Rendimiento por Socio")
     sc1, sc2, sc3 = st.columns(3)
     sc1.metric("Facturado por Ángel Llanez (AL)", f"${fac_angel:,.2f}")
@@ -392,7 +399,7 @@ with tab_trabajos:
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
