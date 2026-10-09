@@ -216,12 +216,22 @@ with tab_dash:
             df_g_f = df_g_f[df_g_f['dt'].dt.month == num_mes]
 
     num_trabajos_mes = len(df_t_f)
-    facturado_mes = df_t_f['total'].sum() if not df_t_f.empty else 0.0
-    num_facturas = df_t_f[df_t_f['factura'].notna() & (df_t_f['factura'] != '')].shape[0] if not df_t_f.empty else 0
+    
+    # Filtro estricto: Solo cuenta como facturado si tiene factura o estatus facturado/pagado (ignora cotizaciones)
+    df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
+    facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
+    num_facturas = df_facturados_mes.shape[0]
     
     cobrado_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
     pendiente_mes = df_t_f[df_t_f['estado_pago'] != 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
-    costo_fiscal_mes = df_t_f['costo_fiscal'].sum() if not df_t_f.empty else 0.0
+    
+    # Costo Fiscal: 8% del subtotal si la cuenta de depósito es "Cansino"
+    costo_fiscal_mes = 0.0
+    if not df_t_f.empty:
+        for _, row in df_t_f.iterrows():
+            if row.get('cuenta_deposito') == 'Cansino':
+                sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
+                costo_fiscal_mes += sub_val * 0.08
     
     subtotal_trabajos_mes = df_t_f['subtotal'].sum() if not df_t_f.empty else 0.0
     subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
@@ -230,8 +240,8 @@ with tab_dash:
     utilidad_mes = subtotal_trabajos_mes - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03
     
-    fac_angel = df_t_f[df_t_f['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty else 0.0
-    fac_montalvo = df_t_f[df_t_f['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_t_f.empty else 0.0
+    fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_facturados_mes.empty else 0.0
+    fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_facturados_mes.empty else 0.0
     
     capital_inicial = get_capital_inicial()
     total_cobrado_historico = df_t[df_t['estado_pago'] == 'Pagado']['total'].sum() if not df_t.empty else 0.0
@@ -321,7 +331,6 @@ with tab_trabajos:
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
                 cotizacion = st.text_input("Cotización No. (Opcional)")
                 
-                # Checkbox para habilitar o no la fecha de cotización de forma opcional
                 usar_f_cot = st.checkbox("¿Incluir Fecha Cotización?", value=True)
                 fecha_cot = st.date_input("Fecha Cotización", value=datetime.today()) if usar_f_cot else None
                 
@@ -366,31 +375,70 @@ with tab_trabajos:
             
             with st.form("form_editar_trabajo"):
                 st.write(f"Editando Registro: **{id_a_editar}**")
-                estados_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"]
-                val_t = registro_actual['estado_trabajo']
-                idx_t = estados_t_opts.index(val_t) if val_t in estados_t_opts else 0
                 
-                estados_p_opts = ["Pendiente", "Pagado", "Parcial"]
-                val_p = registro_actual['estado_pago']
-                idx_p = estados_p_opts.index(val_p) if val_p in estados_p_opts else 0
+                ec1, ec2, ec3 = st.columns(3)
+                with ec1:
+                    est_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"]
+                    val_t = registro_actual['estado_trabajo']
+                    idx_t = est_t_opts.index(val_t) if val_t in est_t_opts else 0
+                    nuevo_estatus_t = st.selectbox("Estado de Trabajo", est_t_opts, index=idx_t)
 
-                nuevo_estatus_t = st.selectbox("Estado de Trabajo", estados_t_opts, index=idx_t)
-                nuevo_estatus_p = st.selectbox("Estado de Pago", estados_p_opts, index=idx_p)
-                sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
-                nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
+                    est_f_opts = ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"]
+                    val_f = registro_actual['estado_financiero']
+                    idx_f = est_f_opts.index(val_f) if val_f in est_f_opts else 0
+                    nuevo_estatus_f = st.selectbox("Estado Financiero", est_f_opts, index=idx_f)
+
+                    est_p_opts = ["Pendiente", "Pagado", "Parcial"]
+                    val_p = registro_actual['estado_pago']
+                    idx_p = est_p_opts.index(val_p) if val_p in est_p_opts else 0
+                    nuevo_estatus_p = st.selectbox("Estado de Pago", est_p_opts, index=idx_p)
+                
+                with ec2:
+                    fac_opts = ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"]
+                    val_fac = registro_actual['facturado_por'] if pd.notna(registro_actual['facturado_por']) and registro_actual['facturado_por'] != '' else "-- Pendiente / Sin facturar --"
+                    idx_fac = fac_opts.index(val_fac) if val_fac in fac_opts else 0
+                    nuevo_fac_por = st.selectbox("Facturado Por", fac_opts, index=idx_fac)
+
+                    val_factura_txt = registro_actual['factura'] if pd.notna(registro_actual['factura']) else ""
+                    nueva_factura = st.text_input("Factura No.", value=val_factura_txt)
+
+                    val_oc_txt = registro_actual['oc'] if pd.notna(registro_actual['oc']) else ""
+                    nueva_oc = st.text_input("O.C.", value=val_oc_txt)
+                
+                with ec3:
+                    val_cta = registro_actual['cuenta_deposito'] if pd.notna(registro_actual['cuenta_deposito']) and registro_actual['cuenta_deposito'] != '' else "-- Sin asignar --"
+                    idx_cta = lista_cuentas.index(val_cta) if val_cta in lista_cuentas else 0
+                    nueva_cuenta = st.selectbox("Cuenta donde se depositó", lista_cuentas, index=idx_cta)
+
+                    portal_opts = ["Pendiente de Subir", "Sí", "No"]
+                    val_portal = registro_actual['portal'] if pd.notna(registro_actual['portal']) else "Pendiente de Subir"
+                    idx_portal = portal_opts.index(val_portal) if val_portal in portal_opts else 0
+                    nuevo_portal = st.selectbox("Portal", portal_opts, index=idx_portal)
+
+                    sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
+                    nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
                 
                 col_btn1, col_btn2 = st.columns(2)
                 if col_btn1.form_submit_button("💾 Guardar Cambios"):
                     nuevo_iva = nuevo_subtotal * 0.16
                     nuevo_total = nuevo_subtotal + nuevo_iva
+                    fac_por_fin = "" if nuevo_fac_por == "-- Pendiente / Sin facturar --" else nuevo_fac_por
+                    cta_fin = "" if nueva_cuenta == "-- Sin asignar --" else nueva_cuenta
+                    
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
-                    cursor.execute('UPDATE trabajos SET estado_trabajo = ?, estado_pago = ?, subtotal = ?, iva = ?, total = ? WHERE id_personalizado = ?', 
-                                   (nuevo_estatus_t, nuevo_estatus_p, nuevo_subtotal, nuevo_iva, nuevo_total, id_a_editar))
+                    cursor.execute('''
+                        UPDATE trabajos SET estado_trabajo = ?, estado_financiero = ?, estado_pago = ?, 
+                                           facturado_por = ?, factura = ?, oc = ?, cuenta_deposito = ?, 
+                                           portal = ?, subtotal = ?, iva = ?, total = ?
+                        WHERE id_personalizado = ?
+                    ''', (nuevo_estatus_t, nuevo_estatus_f, nuevo_estatus_p, fac_por_fin, nueva_factura, 
+                          nueva_oc, cta_fin, nuevo_portal, nuevo_subtotal, nuevo_iva, nuevo_total, id_a_editar))
                     conn.commit()
                     conn.close()
-                    st.success("¡Trabajo actualizado!")
+                    st.success("¡Trabajo actualizado con éxito!")
                     st.rerun()
+                    
                 if col_btn2.form_submit_button("🗑️ Eliminar Trabajo"):
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
@@ -622,11 +670,6 @@ with tab_config:
                 with st.form(f"form_edit_cli_{cid}"):
                     edit_cname = st.text_input("Modificar Nombre", value=cname)
                     col_eb1, col_eb2 = st.columns(2)
-                    if col_eb1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_clientes = ? WHERE id = ?", (edit_cname.strip(), cid)) # corregido abajo en la lógica real
-                    # (Lógica limpia)
                     if col_eb1.form_submit_button("💾 Guardar Cambios"):
                         conn = sqlite3.connect('erp_montacargas.db')
                         cursor = conn.cursor()
