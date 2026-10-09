@@ -432,7 +432,7 @@ with tab_trabajos:
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
@@ -720,7 +720,6 @@ with tab_config:
         "💳 Cuentas"
     ])
 
-    # Carga previa segura de clientes para catálogos
     clients_df_tab = get_catalogo("cat_clientes")
     clients_for_eq = clients_df_tab['nombre'].tolist() if not clients_df_tab.empty else ["General"]
 
@@ -767,17 +766,17 @@ with tab_config:
                             st.warning("Eliminado.")
                             st.rerun()
 
-    # 2. EQUIPOS
+    # 2. EQUIPOS (Corregido y blindado para que guarde ilimitados)
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
-        with st.form("add_eq", clear_on_submit=True):
-            eq_eco = st.text_input("Número Económico (Ej. ECO-01)")
-            eq_marca = st.text_input("Marca")
+        with st.form("add_equipo_form_master", clear_on_submit=True):
+            eq_eco = st.text_input("Número Económico / Identificador (Ej. ECO-01)")
+            eq_marca = st.text_input("Marca (Ej. Toyota, Hyster)")
             eq_modelo = st.text_input("Modelo")
             eq_serie = st.text_input("Serie")
             eq_cliente = st.selectbox("Cliente Asociado / Propio", clients_for_eq)
             
-            if st.form_submit_button("Agregar Equipo"):
+            if st.form_submit_button("Registrar Nuevo Equipo"):
                 if eq_eco.strip():
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
@@ -785,38 +784,43 @@ with tab_config:
                                    (eq_eco.strip(), eq_marca.strip(), eq_modelo.strip(), eq_serie.strip(), eq_cliente))
                     conn.commit()
                     conn.close()
-                    st.success("¡Equipo agregado!")
+                    st.success(f"¡Equipo {eq_eco} registrado correctamente!")
                     st.rerun()
+                else:
+                    st.warning("El número económico es obligatorio.")
         
         st.markdown("---")
         eqs_df_tab = get_equipos_catalogo_df()
         if not eqs_df_tab.empty:
             for _, e in eqs_df_tab.iterrows():
-                with st.expander(f"Eco: {e['eco']} | {e['marca']} {e['modelo']}"):
-                    with st.form(f"form_edit_eq_{e['id']}"):
-                        ed_eco = st.text_input("Número Económico", value=e['eco'])
-                        ed_marca = st.text_input("Marca", value=e['marca'])
-                        ed_modelo = st.text_input("Modelo", value=e['modelo'])
-                        ed_serie = st.text_input("Serie", value=e['serie'])
-                        ed_cli = st.selectbox("Cliente", clients_for_eq, index=clients_for_eq.index(e['cliente']) if e['cliente'] in clients_for_eq else 0)
+                eq_id = e['id'] if 'id' in e else e.get('ID', 0)
+                with st.expander(f"Eco: {e['eco']} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
+                    with st.form(f"form_edit_eq_{eq_id}"):
+                        ed_eco = st.text_input("Número Económico", value=str(e['eco']))
+                        ed_marca = st.text_input("Marca", value=str(e['marca']) if pd.notna(e['marca']) else "")
+                        ed_modelo = st.text_input("Modelo", value=str(e['modelo']) if pd.notna(e['modelo']) else "")
+                        ed_serie = st.text_input("Serie", value=str(e['serie']) if pd.notna(e['serie']) else "")
+                        
+                        idx_cli = clients_for_eq.index(e['cliente']) if e['cliente'] in clients_for_eq else 0
+                        ed_cli = st.selectbox("Cliente", clients_for_eq, index=idx_cli, key=f"sel_cli_eq_{eq_id}")
                         
                         col_eq1, col_eq2 = st.columns(2)
-                        if col_eq1.form_submit_button("💾 Guardar"):
+                        if col_eq1.form_submit_button("💾 Guardar Cambios"):
                             conn = sqlite3.connect('erp_montacargas.db')
                             cursor = conn.cursor()
                             cursor.execute("UPDATE cat_equipos SET eco=?, marca=?, modelo=?, serie=?, cliente=? WHERE id=?", 
-                                           (ed_eco.strip(), ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, e['id']))
+                                           (ed_eco.strip(), ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, eq_id))
                             conn.commit()
                             conn.close()
-                            st.success("¡Actualizado!")
+                            st.success("¡Equipo actualizado con éxito!")
                             st.rerun()
-                        if col_eq2.form_submit_button("🗑️ Borrar"):
+                        if col_eq2.form_submit_button("🗑️ Borrar Equipo"):
                             conn = sqlite3.connect('erp_montacargas.db')
                             cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_equipos WHERE id = ?", (e['id'],))
+                            cursor.execute("DELETE FROM cat_equipos WHERE id = ?", (eq_id,))
                             conn.commit()
                             conn.close()
-                            st.warning("Eliminado.")
+                            st.warning("Equipo eliminado.")
                             st.rerun()
 
     # 3. CATEGORÍAS
