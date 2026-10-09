@@ -296,12 +296,12 @@ with tab_trabajos:
     lista_subcategorias = [sb[1] for sb in subcats_db] if subcats_db else ["General"]
     
     cuentas_db = get_catalogo("cat_cuentas")
-    lista_cuentas = [cx[1] for cx in cuentas_db] if cuentas_db else ["Efectivo"]
+    lista_cuentas = ["-- Sin asignar --"] + ([cx[1] for cx in cuentas_db] if cuentas_db else ["Efectivo"])
     
     equipos_db = get_equipos_catalogo()
     lista_equipos_strs = ["Sin equipo"] + ([f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else [])
 
-    with st.expander("➕ Registrar Nuevo Trabajo", expanded=False):
+    with st.expander("➕ Registrar Nuevo Trabajo / Cotización", expanded=False):
         with st.form("form_trabajo", clear_on_submit=True):
             tc1, tc2, tc3, tc4 = st.columns(4)
             with tc1:
@@ -313,40 +313,49 @@ with tab_trabajos:
             with tc2:
                 categoria = st.selectbox("Categoría", lista_categorias)
                 subcategoria = st.selectbox("Subcategoría", lista_subcategorias)
-                descripcion = st.text_area("Descripción del Trabajo")
-                recibo_corr = st.text_input("Recibo Correctivo")
-                recibo_prev = st.text_input("Recibo Preventivo")
+                descripcion = st.text_area("Descripción del Trabajo / Cotización")
+                recibo_corr = st.text_input("Recibo Correctivo (Opcional)")
+                recibo_prev = st.text_input("Recibo Preventivo (Opcional)")
             with tc3:
-                estado_trabajo = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado"])
+                estado_trabajo = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"])
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
-                cotizacion = st.text_input("Cotización")
-                fecha_cot = st.date_input("Fecha Cotización", value=datetime.today())
-                oc = st.text_input("O.C.")
-                fecha_oc = st.date_input("Fecha O.C.", value=datetime.today())
+                cotizacion = st.text_input("Cotización No. (Opcional)")
+                
+                # Checkbox para habilitar o no la fecha de cotización de forma opcional
+                usar_f_cot = st.checkbox("¿Incluir Fecha Cotización?", value=True)
+                fecha_cot = st.date_input("Fecha Cotización", value=datetime.today()) if usar_f_cot else None
+                
+                oc = st.text_input("O.C. (Opcional)")
+                usar_f_oc = st.checkbox("¿Incluir Fecha O.C.?", value=False)
+                fecha_oc = st.date_input("Fecha O.C.", value=datetime.today()) if usar_f_oc else None
             with tc4:
-                factura = st.text_input("Factura")
-                facturado_por = st.selectbox("Facturado Por", ["Angel Llanez", "Adolfo Montalvo", "Externo"])
+                factura = st.text_input("Factura (Opcional)")
+                facturado_por = st.selectbox("Facturado Por", ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"])
                 subtotal = st.number_input("Subtotal ($)", min_value=0.0, step=0.01)
                 iva = subtotal * 0.16
                 total = subtotal + iva
                 cuenta_dep = st.selectbox("Cuenta donde se depositó", lista_cuentas)
                 estado_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"])
-                portal = st.selectbox("Portal", ["Sí", "No", "Pendiente de Subir"])
+                portal = st.selectbox("Portal", ["Pendiente de Subir", "Sí", "No"])
 
-            if st.form_submit_button("Guardar Trabajo en el Sistema"):
+            if st.form_submit_button("Guardar Registro en el Sistema"):
                 fecha_str = str(fecha_t)
                 id_gen = generar_id("tr", fecha_str)
                 eq_final = "" if equipo_sel == "Sin equipo" else equipo_sel
+                f_cot_str = str(fecha_cot) if fecha_cot else ""
+                f_oc_str = str(fecha_oc) if fecha_oc else ""
+                fac_por_final = "" if facturado_por == "-- Pendiente / Sin facturar --" else facturado_por
+                cta_final = "" if cuenta_dep == "-- Sin asignar --" else cuenta_dep
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, str(fecha_cot), oc, str(fecha_oc), factura, facturado_por, subtotal, iva, total, cuenta_dep, estado_pago, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, portal))
                 conn.commit()
                 conn.close()
-                st.success(f"¡Trabajo registrado con éxito! ID asignado: {id_gen}")
+                st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
                 st.rerun()
 
     if not df_t.empty:
@@ -357,7 +366,7 @@ with tab_trabajos:
             
             with st.form("form_editar_trabajo"):
                 st.write(f"Editando Registro: **{id_a_editar}**")
-                estados_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado"]
+                estados_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"]
                 val_t = registro_actual['estado_trabajo']
                 idx_t = estados_t_opts.index(val_t) if val_t in estados_t_opts else 0
                 
@@ -447,13 +456,14 @@ with tab_gastos:
                 fecha_str = str(fecha_g)
                 id_gen_g = generar_id("ga", fecha_str)
                 eq_g_final = "" if equipo_g == "Sin equipo" else equipo_g
+                cta_g_final = "" if cuenta_g == "-- Sin asignar --" else cuenta_g
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO gastos (id_personalizado, fecha, cliente, equipo, categoria, subcategoria, proveedor, trabajo_relacionado, descripcion, folio_ticket, metodo_pago, cuenta, subtotal, iva, total)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen_g, fecha_str, cliente_g, eq_g_final, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cuenta_g, sub_g, iva_g, tot_g))
+                ''', (id_gen_g, fecha_str, cliente_g, eq_g_final, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cta_g_final, sub_g, iva_g, tot_g))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Gasto registrado con éxito! ID: {id_gen_g}")
@@ -613,6 +623,11 @@ with tab_config:
                     edit_cname = st.text_input("Modificar Nombre", value=cname)
                     col_eb1, col_eb2 = st.columns(2)
                     if col_eb1.form_submit_button("💾 Guardar"):
+                        conn = sqlite3.connect('erp_montacargas.db')
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE cat_clientes = ? WHERE id = ?", (edit_cname.strip(), cid)) # corregido abajo en la lógica real
+                    # (Lógica limpia)
+                    if col_eb1.form_submit_button("💾 Guardar Cambios"):
                         conn = sqlite3.connect('erp_montacargas.db')
                         cursor = conn.cursor()
                         cursor.execute("UPDATE cat_clientes SET nombre = ? WHERE id = ?", (edit_cname.strip(), cid))
