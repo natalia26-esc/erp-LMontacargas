@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 import os
+import io
 
 # Configuración de la página
 st.set_page_config(page_title="ERP Montacargas - Control Financiero", layout="wide")
@@ -113,12 +114,22 @@ init_db()
 def get_catalogo(tabla):
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
-    cursor.execute(f"SELECT id, nombre FROM {tabla} ORDER BY nombre ASC")
+    cursor.execute(f"SELECT * FROM {tabla}")
     res = cursor.fetchall()
+    cols = [description[0] for description in cursor.description]
     conn.close()
-    return res if res else []
+    return pd.DataFrame(res, columns=cols) if res else pd.DataFrame()
 
-def get_equipos_catalogo():
+def get_equipos_catalogo_df():
+    conn = sqlite3.connect('erp_montacargas.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM cat_equipos")
+    res = cursor.fetchall()
+    cols = [description[0] for description in cursor.description]
+    conn.close()
+    return pd.DataFrame(res, columns=cols) if res else pd.DataFrame()
+
+def get_equipos_catalogo_tuples():
     conn = sqlite3.connect('erp_montacargas.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, eco, marca, modelo, serie, cliente FROM cat_equipos")
@@ -164,6 +175,44 @@ with col_logo:
 
 with col_title:
     st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
+
+# Botón de Respaldo Maestro Global en la barra lateral
+with st.sidebar:
+    st.header("🛡️ Respaldo del Sistema")
+    st.write("Descarga todo tu ERP en un solo archivo de Excel organizado por pestañas:")
+    
+    conn = sqlite3.connect('erp_montacargas.db')
+    df_t_ex = pd.read_sql_query("SELECT * FROM trabajos", conn)
+    df_g_ex = pd.read_sql_query("SELECT * FROM gastos", conn)
+    df_r_ex = pd.read_sql_query("SELECT * FROM rentas", conn)
+    df_cli_ex = pd.read_sql_query("SELECT * FROM cat_clientes", conn)
+    df_eq_ex = pd.read_sql_query("SELECT * FROM cat_equipos", conn)
+    df_cat_ex = pd.read_sql_query("SELECT * FROM cat_categorias", conn)
+    df_sub_ex = pd.read_sql_query("SELECT * FROM cat_subcategorias", conn)
+    df_prov_ex = pd.read_sql_query("SELECT * FROM cat_proveedores", conn)
+    df_cta_ex = pd.read_sql_query("SELECT * FROM cat_cuentas", conn)
+    conn.close()
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_t_ex.to_excel(writer, sheet_name='Trabajos', index=False)
+        df_g_ex.to_excel(writer, sheet_name='Gastos', index=False)
+        df_r_ex.to_excel(writer, sheet_name='Rentas', index=False)
+        df_cli_ex.to_excel(writer, sheet_name='Clientes', index=False)
+        df_eq_ex.to_excel(writer, sheet_name='Equipos', index=False)
+        df_cat_ex.to_excel(writer, sheet_name='Categorias', index=False)
+        df_sub_ex.to_excel(writer, sheet_name='Subcategorias', index=False)
+        df_prov_ex.to_excel(writer, sheet_name='Proveedores', index=False)
+        df_cta_ex.to_excel(writer, sheet_name='Cuentas', index=False)
+    
+    excel_data = output.getvalue()
+    
+    st.download_button(
+        label="📥 Descargar Respaldo Total (.xlsx)",
+        data=excel_data,
+        file_name=f"Respaldo_ERP_Montacargas_{datetime.today().strftime('%d%m%Y')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 tab_dash, tab_trabajos, tab_gastos, tab_rentas, tab_config = st.tabs([
     "📊 Dashboard e Indicadores", 
@@ -217,24 +266,19 @@ with tab_dash:
 
     num_trabajos_mes = len(df_t_f)
     
-    # 1. COTIZADO (Solo trabajos con estatus de cotización o N/A Cotización)
     df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
     cotizado_mes = df_cotizados_mes['total'].sum() if not df_cotizados_mes.empty else 0.0
 
-    # 2. FACTURADO (Trabajos con factura emitida o estatus Facturado/Pagado)
     df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
     facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
     num_facturas = df_facturados_mes.shape[0]
     
-    # 3. PAGADO / COBRADO (Solo trabajos con estado de pago 'Pagado')
     df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
     cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
     
-    # 4. PENDIENTE DE COBRO (Aprobados o facturados pero que aún no están pagados)
     df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
     pendiente_mes = df_pendientes_cobro['total'].sum() if not df_pendientes_cobro.empty else 0.0
     
-    # 5. COSTO FISCAL Y SUBTOTAL DE INGRESOS REALES (Basado en los cobrados del mes)
     costo_fiscal_mes = 0.0
     subtotal_ingresos_reales = 0.0
     if not df_pagados_mes.empty:
@@ -247,21 +291,17 @@ with tab_dash:
     subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
     gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
     
-    # 6. UTILIDAD NETA DEL MES (Subtotal cobrado menos subtotal de gastos del mes)
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
-    # Facturación por Socio en el mes
     fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_facturados_mes.empty else 0.0
     fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_facturados_mes.empty else 0.0
     
-    # Ingresos por Socio (según la cuenta de depósito real de los pagados)
     df_todos_pagados = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
     ing_montalvo_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Montalvo']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
     ing_cansino = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cansino']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
     
-    # CAPITAL TOTAL ACTUAL (Capital Inicial + Utilidad Neta Histórica global de todos los pagados menos gastos históricos)
     capital_inicial = get_capital_inicial()
     subtotal_hist_pagados = df_todos_pagados['subtotal'].sum() if not df_todos_pagados.empty else 0.0
     subtotal_hist_gastos = df_g['subtotal'].sum() if not df_g.empty else 0.0
@@ -284,7 +324,6 @@ with tab_dash:
     
     st.markdown("---")
     
-    # Sección de Control y Rendimiento por Socio
     st.subheader("👥 Control y Rendimiento por Socio")
     sc1, sc2, sc3 = st.columns(3)
     sc1.metric("Facturado por Ángel Llanez (AL)", f"${fac_angel:,.2f}")
@@ -322,26 +361,20 @@ with tab_trabajos:
     conn = sqlite3.connect('erp_montacargas.db')
     df_t = pd.read_sql_query("SELECT * FROM trabajos", conn)
     conn.close()
-    
-    if not df_t.empty:
-        archivo_t = "Resguardo_Trabajos.xlsx"
-        df_t.to_excel(archivo_t, index=False)
-        with open(archivo_t, "rb") as f:
-            st.download_button("📥 Descargar Resguardo de Trabajos a Excel", f, file_name="Trabajos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    clientes_db = get_catalogo("cat_clientes")
-    lista_clientes = [c[1] for c in clientes_db] if clientes_db else ["Sin Clientes"]
+    clientes_df = get_catalogo("cat_clientes")
+    lista_clientes = clientes_df['nombre'].tolist() if not clientes_df.empty else ["Sin Clientes"]
     
-    cats_db = get_catalogo("cat_categorias")
-    lista_categorias = [ct[1] for ct in cats_db] if cats_db else ["General"]
+    cats_df = get_catalogo("cat_categorias")
+    lista_categorias = cats_df['nombre'].tolist() if not cats_df.empty else ["General"]
     
-    subcats_db = get_catalogo("cat_subcategorias")
-    lista_subcategorias = [sb[1] for sb in subcats_db] if subcats_db else ["General"]
+    subcats_df = get_catalogo("cat_subcategorias")
+    lista_subcategorias = subcats_df['nombre'].tolist() if not subcats_df.empty else ["General"]
     
-    cuentas_db = get_catalogo("cat_cuentas")
-    lista_cuentas = ["-- Sin asignar --"] + ([cx[1] for cx in cuentas_db] if cuentas_db else ["Efectivo"])
+    cuentas_df = get_catalogo("cat_cuentas")
+    lista_cuentas = ["-- Sin asignar --"] + (cuentas_df['nombre'].tolist() if not cuentas_df.empty else ["Efectivo"])
     
-    equipos_db = get_equipos_catalogo()
+    equipos_db = get_equipos_catalogo_tuples()
     lista_equipos_strs = ["Sin equipo"] + ([f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else [])
 
     with st.expander("➕ Registrar Nuevo Trabajo / Cotización", expanded=False):
@@ -399,7 +432,7 @@ with tab_trabajos:
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
@@ -512,15 +545,9 @@ with tab_gastos:
     conn = sqlite3.connect('erp_montacargas.db')
     df_g = pd.read_sql_query("SELECT * FROM gastos", conn)
     conn.close()
-    
-    if not df_g.empty:
-        archivo_g = "Resguardo_Gastos.xlsx"
-        df_g.to_excel(archivo_g, index=False)
-        with open(archivo_g, "rb") as f:
-            st.download_button("📥 Descargar Resguardo de Gastos a Excel", f, file_name="Gastos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    provs_db = get_catalogo("cat_proveedores")
-    lista_proveedores = [pv[1] for pv in provs_db] if provs_db else ["Sin Proveedores"]
+    provs_df = get_catalogo("cat_proveedores")
+    lista_proveedores = provs_df['nombre'].tolist() if not provs_df.empty else ["Sin Proveedores"]
 
     with st.expander("➕ Registrar Nuevo Gasto", expanded=False):
         with st.form("form_gasto", clear_on_submit=True):
@@ -712,38 +739,41 @@ with tab_config:
                         st.error("El cliente ya existe.")
         
         st.markdown("---")
-        clients = get_catalogo("cat_clientes")
-        for cid, cname in clients:
-            with st.expander(f"Cliente: {cname}"):
-                with st.form(f"form_edit_cli_{cid}"):
-                    edit_cname = st.text_input("Modificar Nombre", value=cname)
-                    col_eb1, col_eb2 = st.columns(2)
-                    if col_eb1.form_submit_button("💾 Guardar Cambios"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_clientes SET nombre = ? WHERE id = ?", (edit_cname.strip(), cid))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Actualizado!")
-                        st.rerun()
-                    if col_eb2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_clientes WHERE id = ?", (cid,))
-                        conn.commit()
-                        conn.close()
-                        st.warning("Eliminado.")
-                        st.rerun()
+        clients_df_tab = get_catalogo("cat_clientes")
+        if not clients_df_tab.empty:
+            for _, row_c in clients_df_tab.iterrows():
+                cid, cname = row_c['id'], row_c['nombre']
+                with st.expander(f"Cliente: {cname}"):
+                    with st.form(f"form_edit_cli_{cid}"):
+                        edit_cname = st.text_input("Modificar Nombre", value=cname)
+                        col_eb1, col_eb2 = st.columns(2)
+                        if col_eb1.form_submit_button("💾 Guardar Cambios"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_clientes SET nombre = ? WHERE id = ?", (edit_cname.strip(), cid))
+                            conn.commit()
+                            conn.close()
+                            st.success("¡Actualizado!")
+                            st.rerun()
+                        if col_eb2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_clientes WHERE id = ?", (cid,))
+                            conn.commit()
+                            conn.close()
+                            st.warning("Eliminado.")
+                            st.rerun()
 
     # 2. EQUIPOS
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
+        clients_for_eq = clients_df['nombre'].tolist() if not clients_df.empty else ["General"]
         with st.form("add_eq", clear_on_submit=True):
             eq_eco = st.text_input("Número Económico (Ej. ECO-01)")
             eq_marca = st.text_input("Marca")
             eq_modelo = st.text_input("Modelo")
             eq_serie = st.text_input("Serie")
-            eq_cliente = st.selectbox("Cliente Asociado / Propio", [c[1] for c in clients] if clients else ["General"])
+            eq_cliente = st.selectbox("Cliente Asociado / Propio", clients_for_eq)
             
             if st.form_submit_button("Agregar Equipo"):
                 if eq_eco.strip():
@@ -757,34 +787,35 @@ with tab_config:
                     st.rerun()
         
         st.markdown("---")
-        eqs = get_equipos_catalogo()
-        for e in eqs:
-            with st.expander(f"Eco: {e[1]} | {e[2]} {e[3]}"):
-                with st.form(f"form_edit_eq_{e[0]}"):
-                    ed_eco = st.text_input("Número Económico", value=e[1])
-                    ed_marca = st.text_input("Marca", value=e[2])
-                    ed_modelo = st.text_input("Modelo", value=e[3])
-                    ed_serie = st.text_input("Serie", value=e[4])
-                    ed_cli = st.selectbox("Cliente", [c[1] for c in clients] if clients else ["General"], index=[c[1] for c in clients].index(e[5]) if e[5] in [c[1] for c in clients] else 0)
-                    
-                    col_eq1, col_eq2 = st.columns(2)
-                    if col_eq1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_equipos SET eco=?, marca=?, modelo=?, serie=?, cliente=? WHERE id=?", 
-                                       (ed_eco.strip(), ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, e[0]))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Actualizado!")
-                        st.rerun()
-                    if col_eq2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_equipos WHERE id = ?", (e[0],))
-                        conn.commit()
-                        conn.close()
-                        st.warning("Eliminado.")
-                        st.rerun()
+        eqs_df_tab = get_equipos_catalogo_df()
+        if not eqs_df_tab.empty:
+            for _, e in eqs_df_tab.iterrows():
+                with st.expander(f"Eco: {e['eco']} | {e['marca']} {e['modelo']}"):
+                    with st.form(f"form_edit_eq_{e['id']}"):
+                        ed_eco = st.text_input("Número Económico", value=e['eco'])
+                        ed_marca = st.text_input("Marca", value=e['marca'])
+                        ed_modelo = st.text_input("Modelo", value=e['modelo'])
+                        ed_serie = st.text_input("Serie", value=e['serie'])
+                        ed_cli = st.selectbox("Cliente", clients_for_eq, index=clients_for_eq.index(e['cliente']) if e['cliente'] in clients_for_eq else 0)
+                        
+                        col_eq1, col_eq2 = st.columns(2)
+                        if col_eq1.form_submit_button("💾 Guardar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_equipos SET eco=?, marca=?, modelo=?, serie=?, cliente=? WHERE id=?", 
+                                           (ed_eco.strip(), ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, e['id']))
+                            conn.commit()
+                            conn.close()
+                            st.success("¡Actualizado!")
+                            st.rerun()
+                        if col_eq2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_equipos WHERE id = ?", (e['id'],))
+                            conn.commit()
+                            conn.close()
+                            st.warning("Eliminado.")
+                            st.rerun()
 
     # 3. CATEGORÍAS
     with sub_cat_tab3:
@@ -804,26 +835,28 @@ with tab_config:
                     except sqlite3.IntegrityError:
                         st.error("Ya existe.")
         st.markdown("---")
-        cats = get_catalogo("cat_categorias")
-        for cid, cname in cats:
-            with st.expander(f"Categoría: {cname}"):
-                with st.form(f"form_edit_cat_{cid}"):
-                    ed_cname = st.text_input("Modificar", value=cname)
-                    cb1, cb2 = st.columns(2)
-                    if cb1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_categorias SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
-                    if cb2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_categorias WHERE id=?", (cid,))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
+        cats_df_tab = get_catalogo("cat_categorias")
+        if not cats_df_tab.empty:
+            for _, row_cat in cats_df_tab.iterrows():
+                cid, cname = row_cat['id'], row_cat['nombre']
+                with st.expander(f"Categoría: {cname}"):
+                    with st.form(f"form_edit_cat_{cid}"):
+                        ed_cname = st.text_input("Modificar", value=cname)
+                        cb1, cb2 = st.columns(2)
+                        if cb1.form_submit_button("💾 Guardar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_categorias SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
+                        if cb2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_categorias WHERE id=?", (cid,))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
 
     # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
@@ -843,26 +876,28 @@ with tab_config:
                     except sqlite3.IntegrityError:
                         st.error("Ya existe.")
         st.markdown("---")
-        subcats = get_catalogo("cat_subcategorias")
-        for cid, cname in subcats:
-            with st.expander(f"Subcategoría: {cname}"):
-                with st.form(f"form_edit_subcat_{cid}"):
-                    ed_sname = st.text_input("Modificar", value=cname)
-                    sb1, sb2 = st.columns(2)
-                    if sb1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_subcategorias SET nombre=? WHERE id=?", (ed_sname.strip(), cid))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
-                    if sb2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_subcategorias WHERE id=?", (cid,))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
+        sub_df_tab = get_catalogo("cat_subcategorias")
+        if not sub_df_tab.empty:
+            for _, row_sub in sub_df_tab.iterrows():
+                cid, cname = row_sub['id'], row_sub['nombre']
+                with st.expander(f"Subcategoría: {cname}"):
+                    with st.form(f"form_edit_subcat_{cid}"):
+                        ed_sname = st.text_input("Modificar", value=cname)
+                        sb1, sb2 = st.columns(2)
+                        if sb1.form_submit_button("💾 Guardar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_subcategorias SET nombre=? WHERE id=?", (ed_sname.strip(), cid))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
+                        if sb2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_subcategorias WHERE id=?", (cid,))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
 
     # 5. PROVEEDORES
     with sub_cat_tab5:
@@ -882,26 +917,28 @@ with tab_config:
                     except sqlite3.IntegrityError:
                         st.error("Ya existe.")
         st.markdown("---")
-        provs = get_catalogo("cat_proveedores")
-        for cid, cname in provs:
-            with st.expander(f"Proveedor: {cname}"):
-                with st.form(f"form_edit_prov_{cid}"):
-                    ed_pname = st.text_input("Modificar", value=cname)
-                    pb1, pb2 = st.columns(2)
-                    if pb1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_proveedores SET nombre=? WHERE id=?", (ed_pname.strip(), cid))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
-                    if pb2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_proveedores WHERE id=?", (cid,))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
+        prov_df_tab = get_catalogo("cat_proveedores")
+        if not prov_df_tab.empty:
+            for _, row_p in prov_df_tab.iterrows():
+                cid, cname = row_p['id'], row_p['nombre']
+                with st.expander(f"Proveedor: {cname}"):
+                    with st.form(f"form_edit_prov_{cid}"):
+                        ed_pname = st.text_input("Modificar", value=cname)
+                        pb1, pb2 = st.columns(2)
+                        if pb1.form_submit_button("💾 Guardar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_proveedores SET nombre=? WHERE id=?", (ed_pname.strip(), cid))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
+                        if pb2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_proveedores WHERE id=?", (cid,))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
 
     # 6. CUENTAS
     with sub_cat_tab6:
@@ -921,23 +958,25 @@ with tab_config:
                     except sqlite3.IntegrityError:
                         st.error("Ya existe.")
         st.markdown("---")
-        ctas = get_catalogo("cat_cuentas")
-        for cid, cname in ctas:
-            with st.expander(f"Cuenta: {cname}"):
-                with st.form(f"form_edit_cta_{cid}"):
-                    ed_cname = st.text_input("Modificar", value=cname)
-                    cb1, cb2 = st.columns(2)
-                    if cb1.form_submit_button("💾 Guardar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE cat_cuentas SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
-                    if cb2.form_submit_button("🗑️ Borrar"):
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM cat_cuentas WHERE id=?", (cid,))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
+        cta_df_tab = get_catalogo("cat_cuentas")
+        if not cta_df_tab.empty:
+            for _, row_cta in cta_df_tab.iterrows():
+                cid, cname = row_cta['id'], row_cta['nombre']
+                with st.expander(f"Cuenta: {cname}"):
+                    with st.form(f"form_edit_cta_{cid}"):
+                        ed_cname = st.text_input("Modificar", value=cname)
+                        cb1, cb2 = st.columns(2)
+                        if cb1.form_submit_button("💾 Guardar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE cat_cuentas SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
+                        if cb2.form_submit_button("🗑️ Borrar"):
+                            conn = sqlite3.connect('erp_montacargas.db')
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM cat_cuentas WHERE id=?", (cid,))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
