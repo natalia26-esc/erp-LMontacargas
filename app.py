@@ -217,31 +217,44 @@ with tab_dash:
 
     num_trabajos_mes = len(df_t_f)
     
-    # Filtro estricto: Solo cuenta como facturado si tiene factura o estatus facturado/pagado (ignora cotizaciones)
+    # Cotizado total
+    cotizado_mes = df_t_f['total'].sum() if not df_t_f.empty else 0.0
+
+    # Facturado (con factura o estatus facturado/pagado)
     df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
     facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
     num_facturas = df_facturados_mes.shape[0]
     
-    cobrado_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
-    pendiente_mes = df_t_f[df_t_f['estado_pago'] != 'Pagado']['total'].sum() if not df_t_f.empty else 0.0
+    # Pagado / Cobrado real
+    df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
+    cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
     
-    # Costo Fiscal: 8% del subtotal si la cuenta de depósito es "Cansino"
+    pendiente_mes = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]['total'].sum() if not df_t_f.empty else 0.0
+    
+    # Costo fiscal y subtotal de ingresos reales
     costo_fiscal_mes = 0.0
-    if not df_t_f.empty:
-        for _, row in df_t_f.iterrows():
+    subtotal_ingresos_reales = 0.0
+    if not df_pagados_mes.empty:
+        for _, row in df_pagados_mes.iterrows():
+            sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
+            subtotal_ingresos_reales += sub_val
             if row.get('cuenta_deposito') == 'Cansino':
-                sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
                 costo_fiscal_mes += sub_val * 0.08
     
-    subtotal_trabajos_mes = df_t_f['subtotal'].sum() if not df_t_f.empty else 0.0
     subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
     gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
     
-    utilidad_mes = subtotal_trabajos_mes - subtotal_gastos_mes
-    comp_3_mes = utilidad_mes * 0.03
+    utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
+    comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
+    # Desglose por Socio (Facturación)
     fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_facturados_mes.empty else 0.0
     fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_facturados_mes.empty else 0.0
+    
+    # Desglose por Socio (Ingresado / Depositado en sus cuentas específicas)
+    ing_angel_cuenta = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cuenta Llanez']['total'].sum() if not df_pagados_mes.empty else 0.0
+    ing_montalvo_cuenta = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cuenta Montalvo']['total'].sum() if not df_pagados_mes.empty else 0.0
+    ing_cansino = df_pagados_mes[df_pagados_mes['cuenta_deposito'] == 'Cansino']['total'].sum() if not df_pagados_mes.empty else 0.0
     
     capital_inicial = get_capital_inicial()
     total_cobrado_historico = df_t[df_t['estado_pago'] == 'Pagado']['total'].sum() if not df_t.empty else 0.0
@@ -249,26 +262,39 @@ with tab_dash:
     capital_total_actual = capital_inicial + total_cobrado_historico - total_gastos_historico
     
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Trabajos del Mes", f"{num_trabajos_mes}")
+    c1.metric("Cotizado (Total)", f"${cotizado_mes:,.2f}")
     c2.metric("Facturado", f"${facturado_mes:,.2f}", f"{num_facturas} Facturas")
-    c3.metric("Cobrado este mes", f"${cobrado_mes:,.2f}")
-    c4.metric("Pendiente (Mes)", f"${pendiente_mes:,.2f}")
+    c3.metric("Pagado (Cobrado)", f"${cobrado_mes:,.2f}")
+    c4.metric("Pendiente de Cobro", f"${pendiente_mes:,.2f}")
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
     
     c6, c7, c8, c9, c10 = st.columns(5)
     c6.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
-    c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}")
+    c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}", f"AL: ${fac_angel:,.2f}")
     c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
-    c9.metric("Utilidad (Sin IVA)", f"${utilidad_mes:,.2f}")
+    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
     c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
     
     st.markdown("---")
+    
+    # Sección de Métricas Detalladas por Socio (Facturación e Ingresos en Cuentas)
+    st.subheader("👥 Control y Rendimiento por Socio")
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("Facturado por Ángel Llanez (AL)", f"${fac_angel:,.2f}")
+    sc2.metric("Facturado por Adolfo Montalvo (AM)", f"${fac_montalvo:,.2f}")
+    sc3.metric("Ingresos en Cuenta Cansino", f"${ing_cansino:,.2f}")
+
+    sc4, sc5, _ = st.columns(3)
+    sc4.metric("Ingresado (Cuenta Llanez)", f"${ing_angel_cuenta:,.2f}")
+    sc5.metric("Ingresado (Cuenta Montalvo)", f"${ing_montalvo_cuenta:,.2f}")
+
+    st.markdown("---")
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.subheader("📈 Ingresos vs Gastos del Mes")
+        st.subheader("📈 Ingresos Cobrados vs Gastos del Mes")
         df_bar = pd.DataFrame({
-            'Concepto': ['Subtotal Ingresos', 'Subtotal Gastos', 'Utilidad (Sin IVA)'],
-            'Monto': [subtotal_trabajos_mes, subtotal_gastos_mes, utilidad_mes]
+            'Concepto': ['Subtotal Cobrado', 'Subtotal Gastos', 'Utilidad Neta'],
+            'Monto': [subtotal_ingresos_reales, subtotal_gastos_mes, utilidad_mes]
         })
         st.bar_chart(df_bar.set_index('Concepto'))
             
@@ -345,6 +371,10 @@ with tab_trabajos:
                 total = subtotal + iva
                 cuenta_dep = st.selectbox("Cuenta donde se depositó", lista_cuentas)
                 estado_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"])
+                
+                usar_f_pago = st.checkbox("¿Incluir Fecha de Pago?", value=False)
+                fecha_pago = st.date_input("Fecha de Pago", value=datetime.today()) if usar_f_pago else None
+                
                 portal = st.selectbox("Portal", ["Pendiente de Subir", "Sí", "No"])
 
             if st.form_submit_button("Guardar Registro en el Sistema"):
@@ -353,15 +383,16 @@ with tab_trabajos:
                 eq_final = "" if equipo_sel == "Sin equipo" else equipo_sel
                 f_cot_str = str(fecha_cot) if fecha_cot else ""
                 f_oc_str = str(fecha_oc) if fecha_oc else ""
+                f_pago_str = str(fecha_pago) if fecha_pago else ""
                 fac_por_final = "" if facturado_por == "-- Pendiente / Sin facturar --" else facturado_por
                 cta_final = "" if cuenta_dep == "-- Sin asignar --" else cuenta_dep
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, portal)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, portal))
+                    INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
@@ -417,6 +448,15 @@ with tab_trabajos:
 
                     sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
                     nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
+
+                    val_fp_ant = registro_actual['fecha_pago'] if pd.notna(registro_actual['fecha_pago']) and registro_actual['fecha_pago'] != '' else str(datetime.today().date())
+                    try:
+                        dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date()
+                    except:
+                        dt_fp = datetime.today().date()
+                    
+                    usar_f_pago_ed = st.checkbox("¿Actualizar / Incluir Fecha de Pago?", value=bool(val_fp_ant))
+                    nueva_fecha_pago = st.date_input("Fecha de Pago", value=dt_fp) if usar_f_pago_ed else ""
                 
                 col_btn1, col_btn2 = st.columns(2)
                 if col_btn1.form_submit_button("💾 Guardar Cambios"):
@@ -424,16 +464,17 @@ with tab_trabajos:
                     nuevo_total = nuevo_subtotal + nuevo_iva
                     fac_por_fin = "" if nuevo_fac_por == "-- Pendiente / Sin facturar --" else nuevo_fac_por
                     cta_fin = "" if nueva_cuenta == "-- Sin asignar --" else nueva_cuenta
+                    f_pago_fin = str(nueva_fecha_pago) if nueva_fecha_pago else ""
                     
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
                     cursor.execute('''
                         UPDATE trabajos SET estado_trabajo = ?, estado_financiero = ?, estado_pago = ?, 
                                            facturado_por = ?, factura = ?, oc = ?, cuenta_deposito = ?, 
-                                           portal = ?, subtotal = ?, iva = ?, total = ?
+                                           portal = ?, subtotal = ?, iva = ?, total = ?, fecha_pago = ?
                         WHERE id_personalizado = ?
                     ''', (nuevo_estatus_t, nuevo_estatus_f, nuevo_estatus_p, fac_por_fin, nueva_factura, 
-                          nueva_oc, cta_fin, nuevo_portal, nuevo_subtotal, nuevo_iva, nuevo_total, id_a_editar))
+                          nueva_oc, cta_fin, nuevo_portal, nuevo_subtotal, nuevo_iva, nuevo_total, f_pago_fin, id_a_editar))
                     conn.commit()
                     conn.close()
                     st.success("¡Trabajo actualizado con éxito!")
