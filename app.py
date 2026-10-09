@@ -432,7 +432,7 @@ with tab_trabajos:
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
@@ -766,37 +766,36 @@ with tab_config:
                             st.warning("Eliminado.")
                             st.rerun()
 
-    # 2. EQUIPOS (Corregido y blindado para que guarde ilimitados)
+    # 2. EQUIPOS (Económico opcional / flexible)
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
-        with st.form("add_equipo_form_master", clear_on_submit=True):
-            eq_eco = st.text_input("Número Económico / Identificador (Ej. ECO-01)")
-            eq_marca = st.text_input("Marca (Ej. Toyota, Hyster)")
+        with st.form("add_equipo_form_master_v3", clear_on_submit=True):
+            eq_eco = st.text_input("Número Económico / Identificador (Opcional)")
+            eq_marca = st.text_input("Marca (Ej. Mitsubishi, Toyota)")
             eq_modelo = st.text_input("Modelo")
             eq_serie = st.text_input("Serie")
             eq_cliente = st.selectbox("Cliente Asociado / Propio", clients_for_eq)
             
             if st.form_submit_button("Registrar Nuevo Equipo"):
-                if eq_eco.strip():
-                    conn = sqlite3.connect('erp_montacargas.db')
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT INTO cat_equipos (eco, marca, modelo, serie, cliente) VALUES (?, ?, ?, ?, ?)", 
-                                   (eq_eco.strip(), eq_marca.strip(), eq_modelo.strip(), eq_serie.strip(), eq_cliente))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"¡Equipo {eq_eco} registrado correctamente!")
-                    st.rerun()
-                else:
-                    st.warning("El número económico es obligatorio.")
+                eco_final = eq_eco.strip() if eq_eco.strip() else "S/N"
+                conn = sqlite3.connect('erp_montacargas.db')
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO cat_equipos (eco, marca, modelo, serie, cliente) VALUES (?, ?, ?, ?, ?)", 
+                               (eco_final, eq_marca.strip(), eq_modelo.strip(), eq_serie.strip(), eq_cliente))
+                conn.commit()
+                conn.close()
+                st.success("¡Equipo registrado correctamente!")
+                st.rerun()
         
         st.markdown("---")
         eqs_df_tab = get_equipos_catalogo_df()
         if not eqs_df_tab.empty:
             for _, e in eqs_df_tab.iterrows():
                 eq_id = e['id'] if 'id' in e else e.get('ID', 0)
-                with st.expander(f"Eco: {e['eco']} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
+                eco_display = e['eco'] if pd.notna(e['eco']) and str(e['eco']).strip() != "" else "S/N"
+                with st.expander(f"Eco: {eco_display} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
                     with st.form(f"form_edit_eq_{eq_id}"):
-                        ed_eco = st.text_input("Número Económico", value=str(e['eco']))
+                        ed_eco = st.text_input("Número Económico", value=str(e['eco']) if pd.notna(e['eco']) else "")
                         ed_marca = st.text_input("Marca", value=str(e['marca']) if pd.notna(e['marca']) else "")
                         ed_modelo = st.text_input("Modelo", value=str(e['modelo']) if pd.notna(e['modelo']) else "")
                         ed_serie = st.text_input("Serie", value=str(e['serie']) if pd.notna(e['serie']) else "")
@@ -806,10 +805,11 @@ with tab_config:
                         
                         col_eq1, col_eq2 = st.columns(2)
                         if col_eq1.form_submit_button("💾 Guardar Cambios"):
+                            eco_edit_final = ed_eco.strip() if ed_eco.strip() else "S/N"
                             conn = sqlite3.connect('erp_montacargas.db')
                             cursor = conn.cursor()
                             cursor.execute("UPDATE cat_equipos SET eco=?, marca=?, modelo=?, serie=?, cliente=? WHERE id=?", 
-                                           (ed_eco.strip(), ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, eq_id))
+                                           (eco_edit_final, ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, eq_id))
                             conn.commit()
                             conn.close()
                             st.success("¡Equipo actualizado con éxito!")
