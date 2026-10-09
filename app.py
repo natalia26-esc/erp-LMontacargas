@@ -69,7 +69,6 @@ def init_db():
         )
     ''')
     
-    # Tabla de Rentas
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rentas (
             id_personalizado TEXT PRIMARY KEY,
@@ -89,7 +88,6 @@ def init_db():
         )
     ''')
     
-    # Tablas de Catálogos Maestros Dinámicos
     cursor.execute('CREATE TABLE IF NOT EXISTS cat_clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS cat_equipos (id INTEGER PRIMARY KEY AUTOINCREMENT, eco TEXT, marca TEXT, modelo TEXT, serie TEXT, cliente TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS cat_categorias (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
@@ -97,7 +95,6 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS cat_proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS cat_cuentas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
     
-    # Insertar valores por defecto si están vacías
     cursor.execute("SELECT COUNT(*) FROM cat_categorias")
     if cursor.fetchone()[0] == 0:
         for c in ["Mantenimiento", "Venta", "Renta", "Refacción", "Servicio Correctivo", "Servicio Preventivo"]:
@@ -254,6 +251,24 @@ with tab_dash:
     c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
     c9.metric("Utilidad (Sin IVA)", f"${utilidad_mes:,.2f}")
     c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    
+    st.markdown("---")
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.subheader("📈 Ingresos vs Gastos del Mes")
+        df_bar = pd.DataFrame({
+            'Concepto': ['Subtotal Ingresos', 'Subtotal Gastos', 'Utilidad (Sin IVA)'],
+            'Monto': [subtotal_trabajos_mes, subtotal_gastos_mes, utilidad_mes]
+        })
+        st.bar_chart(df_bar.set_index('Concepto'))
+            
+    with col_g2:
+        st.subheader("📊 Facturación por Socio")
+        df_soc = pd.DataFrame({
+            'Socio': ['Angel Llanez', 'Adolfo Montalvo'],
+            'Facturación': [fac_angel, fac_montalvo]
+        })
+        st.bar_chart(df_soc.set_index('Socio'))
 
 # ==========================================
 # PESTAÑA 2: TRABAJOS Y OPERACIONES
@@ -284,10 +299,10 @@ with tab_trabajos:
     lista_cuentas = [cx[1] for cx in cuentas_db] if cuentas_db else ["Efectivo"]
     
     equipos_db = get_equipos_catalogo()
-    lista_equipos_strs = [f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else ["Sin equipos registrados"]
+    lista_equipos_strs = ["Sin equipo"] + ([f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else [])
 
     with st.expander("➕ Registrar Nuevo Trabajo", expanded=False):
-        with st.form("form_trabajo"):
+        with st.form("form_trabajo", clear_on_submit=True):
             tc1, tc2, tc3, tc4 = st.columns(4)
             with tc1:
                 fecha_t = st.date_input("Fecha", value=datetime.today())
@@ -321,13 +336,14 @@ with tab_trabajos:
             if st.form_submit_button("Guardar Trabajo en el Sistema"):
                 fecha_str = str(fecha_t)
                 id_gen = generar_id("tr", fecha_str)
+                eq_final = "" if equipo_sel == "Sin equipo" else equipo_sel
                 
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, portal)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, equipo_sel, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, str(fecha_cot), oc, str(fecha_oc), factura, facturado_por, subtotal, iva, total, cuenta_dep, estado_pago, portal))
+                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_prev, estado_trabajo, estado_financiero, cotizacion, str(fecha_cot), oc, str(fecha_oc), factura, facturado_por, subtotal, iva, total, cuenta_dep, estado_pago, portal))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Trabajo registrado con éxito! ID asignado: {id_gen}")
@@ -402,7 +418,7 @@ with tab_gastos:
     lista_proveedores = [pv[1] for pv in provs_db] if provs_db else ["Sin Proveedores"]
 
     with st.expander("➕ Registrar Nuevo Gasto", expanded=False):
-        with st.form("form_gasto"):
+        with st.form("form_gasto", clear_on_submit=True):
             gc1, gc2, gc3 = st.columns(3)
             with gc1:
                 fecha_g = st.date_input("Fecha Gasto", value=datetime.today())
@@ -430,12 +446,14 @@ with tab_gastos:
             if st.form_submit_button("Guardar Gasto"):
                 fecha_str = str(fecha_g)
                 id_gen_g = generar_id("ga", fecha_str)
+                eq_g_final = "" if equipo_g == "Sin equipo" else equipo_g
+                
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO gastos (id_personalizado, fecha, cliente, equipo, categoria, subcategoria, proveedor, trabajo_relacionado, descripcion, folio_ticket, metodo_pago, cuenta, subtotal, iva, total)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen_g, fecha_str, cliente_g, equipo_g, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cuenta_g, sub_g, iva_g, tot_g))
+                ''', (id_gen_g, fecha_str, cliente_g, eq_g_final, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cuenta_g, sub_g, iva_g, tot_g))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Gasto registrado con éxito! ID: {id_gen_g}")
@@ -460,7 +478,7 @@ with tab_rentas:
     conn.close()
     
     with st.expander("➕ Registrar Nueva Renta", expanded=False):
-        with st.form("form_renta"):
+        with st.form("form_renta", clear_on_submit=True):
             rc1, rc2, rc3 = st.columns(3)
             with rc1:
                 cli_renta = st.selectbox("Cliente", lista_clientes, key="cli_r")
@@ -475,12 +493,14 @@ with tab_rentas:
             if st.form_submit_button("Guardar Renta"):
                 fecha_str = str(datetime.today().date())
                 id_r = generar_id("rt", fecha_str)
+                eq_r_final = "" if eq_renta == "Sin equipo" else eq_renta
+                
                 conn = sqlite3.connect('erp_montacargas.db')
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO rentas (id_personalizado, cliente, equipo, fecha_inicio, fecha_fin, monto, estado)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (id_r, cli_renta, eq_renta, str(f_inicio), str(f_fin), monto_renta, estado_renta))
+                ''', (id_r, cli_renta, eq_r_final, str(f_inicio), str(f_fin), monto_renta, estado_renta))
                 conn.commit()
                 conn.close()
                 st.success(f"¡Renta registrada con éxito! ID: {id_r}")
@@ -495,7 +515,6 @@ with tab_rentas:
             f_venc = datetime.strptime(row['fecha_fin'], "%Y-%m-%d").date()
             dias_restantes = (f_venc - hoy).days
             
-            # Alertas visuales
             badge = ""
             if row['estado'] == "Activa":
                 if dias_restantes < 0:
@@ -513,8 +532,6 @@ with tab_rentas:
                 st.write(f"• **Monto Subtotal:** ${row['monto']:,.2f}")
                 
                 col_ra1, col_ra2 = st.columns(2)
-                
-                # Botón para generar Cotización / Trabajo automático
                 if col_ra1.button("⚡ Generar Trabajo / Cotización de Renta", key=f"gen_trab_{row['id_personalizado']}"):
                     fecha_hoy_str = str(datetime.today().date())
                     id_nuevo_trabajo = generar_id("tr", fecha_hoy_str)
@@ -533,7 +550,6 @@ with tab_rentas:
                     conn.close()
                     st.success(f"¡Trabajo generado con éxito en Trabajos y Operaciones con ID: {id_nuevo_trabajo}!")
                 
-                # Botón para eliminar renta
                 if col_ra2.button("🗑️ Borrar Renta", key=f"del_renta_{row['id_personalizado']}"):
                     conn = sqlite3.connect('erp_montacargas.db')
                     cursor = conn.cursor()
@@ -574,7 +590,7 @@ with tab_config:
     # 1. CLIENTES
     with sub_cat_tab1:
         st.subheader("Administrar Clientes")
-        with st.form("add_cli"):
+        with st.form("add_cli", clear_on_submit=True):
             nuevo_cli = st.text_input("Nombre del Nuevo Cliente")
             if st.form_submit_button("Agregar Cliente"):
                 if nuevo_cli.strip():
@@ -616,7 +632,7 @@ with tab_config:
     # 2. EQUIPOS
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
-        with st.form("add_eq"):
+        with st.form("add_eq", clear_on_submit=True):
             eq_eco = st.text_input("Número Económico (Ej. ECO-01)")
             eq_marca = st.text_input("Marca")
             eq_modelo = st.text_input("Modelo")
@@ -667,7 +683,7 @@ with tab_config:
     # 3. CATEGORÍAS
     with sub_cat_tab3:
         st.subheader("Administrar Categorías")
-        with st.form("add_cat"):
+        with st.form("add_cat", clear_on_submit=True):
             n_cat = st.text_input("Nueva Categoría")
             if st.form_submit_button("Agregar Categoría"):
                 if n_cat.strip():
@@ -706,7 +722,7 @@ with tab_config:
     # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
         st.subheader("Administrar Subcategorías")
-        with st.form("add_subcat"):
+        with st.form("add_subcat", clear_on_submit=True):
             n_sub = st.text_input("Nueva Subcategoría")
             if st.form_submit_button("Agregar Subcategoría"):
                 if n_sub.strip():
@@ -745,7 +761,7 @@ with tab_config:
     # 5. PROVEEDORES
     with sub_cat_tab5:
         st.subheader("Administrar Proveedores")
-        with st.form("add_prov"):
+        with st.form("add_prov", clear_on_submit=True):
             n_prov = st.text_input("Nombre del Proveedor")
             if st.form_submit_button("Agregar Proveedor"):
                 if n_prov.strip():
@@ -784,7 +800,7 @@ with tab_config:
     # 6. CUENTAS
     with sub_cat_tab6:
         st.subheader("Administrar Cuentas / Bancos")
-        with st.form("add_cta"):
+        with st.form("add_cta", clear_on_submit=True):
             n_cta = st.text_input("Nombre de la Cuenta o Método")
             if st.form_submit_button("Agregar Cuenta"):
                 if n_cta.strip():
