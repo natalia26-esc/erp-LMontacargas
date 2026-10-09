@@ -222,6 +222,12 @@ with tab_dash:
     fac_angel = df_t_f[df_t_f['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty else 0.0
     fac_montalvo = df_t_f[df_t_f['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_t_f.empty else 0.0
     
+    # Cálculo del Capital Total (Capital Inicial + Suma de ingresos cobrados - Gastos pagados o saldo en cuentas)
+    capital_inicial = get_capital_inicial()
+    total_cobrado_historico = df_t[df_t['estado_pago'] == 'Pagado']['total'].sum() if not df_t.empty else 0.0
+    total_gastos_historico = df_g['total'].sum() if not df_g.empty else 0.0
+    capital_total_actual = capital_inicial + total_cobrado_historico - total_gastos_historico
+    
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     c2.metric("Facturado", f"${facturado_mes:,.2f}", f"{num_facturas} Facturas")
@@ -230,7 +236,7 @@ with tab_dash:
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
     
     c6, c7, c8, c9, c10 = st.columns(5)
-    c6.metric("Facturado (AL)", f"${fac_angel:,.2f}")
+    c6.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
     c7.metric("Facturado (AM)", f"${fac_montalvo:,.2f}")
     c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
     c9.metric("Utilidad (Sin IVA)", f"${utilidad_mes:,.2f}")
@@ -273,7 +279,6 @@ with tab_trabajos:
         with open(archivo_t, "rb") as f:
             st.download_button("📥 Descargar Resguardo de Trabajos a Excel", f, file_name="Trabajos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Listas limpias para selects (extraemos solo los nombres)
     clientes_db = get_catalogo("cat_clientes")
     lista_clientes = [c[1] for c in clientes_db] if clientes_db else ["Sin Clientes"]
     
@@ -534,7 +539,7 @@ with tab_config:
         "💳 Cuentas"
     ])
 
-    # 1. CLIENTES (Con Editar y Borrar)
+    # 1. CLIENTES
     with sub_cat_tab1:
         st.subheader("Administrar Clientes")
         with st.form("add_cli"):
@@ -578,7 +583,7 @@ with tab_config:
                         st.warning("Cliente eliminado.")
                         st.rerun()
 
-    # 2. EQUIPOS (Con Editar y Borrar)
+    # 2. EQUIPOS
     with sub_cat_tab2:
         st.subheader("Administrar Equipos")
         with st.form("add_eq"):
@@ -630,7 +635,7 @@ with tab_config:
                         st.warning("Equipo eliminado.")
                         st.rerun()
 
-    # 3. CATEGORÍAS (Con Editar y Borrar)
+    # 3. CATEGORÍAS
     with sub_cat_tab3:
         st.subheader("Administrar Categorías")
         with st.form("add_cat"):
@@ -672,7 +677,7 @@ with tab_config:
                         st.warning("Eliminado.")
                         st.rerun()
 
-    # 4. SUBCATEGORÍAS (Con Editar y Borrar)
+    # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
         st.subheader("Administrar Subcategorías")
         with st.form("add_subcat"):
@@ -714,7 +719,7 @@ with tab_config:
                         st.warning("Eliminado.")
                         st.rerun()
 
-    # 5. PROVEEDORES (Con Editar y Borrar)
+    # 5. PROVEEDORES
     with sub_cat_tab5:
         st.subheader("Administrar Proveedores")
         with st.form("add_prov"):
@@ -756,7 +761,7 @@ with tab_config:
                         st.warning("Eliminado.")
                         st.rerun()
 
-    # 6. CUENTAS (Con Editar y Borrar)
+    # 6. CUENTAS
     with sub_cat_tab6:
         st.subheader("Administrar Cuentas / Bancos")
         with st.form("add_cta"):
