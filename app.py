@@ -248,11 +248,12 @@ with tab_dash:
                 costo_fiscal_mes += sub_val * 0.08
                 
     iva_gastos_mes = df_g_f['iva'].astype(float).sum() if not df_g_f.empty else 0.0
-    subtotal_gastos_mes = df_g_f['subtotal'].astype(float).sum() if not df_g_f.empty else 0.0
+    # Aquí obtenemos el TOTAL real del gasto
+    gastos_totales_mes = df_g_f['total'].astype(float).sum() if not df_g_f.empty else 0.0
     
-    # Nuevas variables de Utilidad basadas estrictamente en subtotales
+    # Nuevas variables de Utilidad ajustadas a tus instrucciones:
     utilidad_neta_pagados = subtotal_ingresos_reales
-    utilidad_neta_sin_gastos = subtotal_ingresos_reales - subtotal_gastos_mes
+    utilidad_neta_sin_gastos = subtotal_ingresos_reales - gastos_totales_mes
     comp_3_mes = utilidad_neta_sin_gastos * 0.03 if utilidad_neta_sin_gastos > 0 else 0.0
     
     fac_angel = 0.0
@@ -268,13 +269,13 @@ with tab_dash:
     ing_montalvo_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Montalvo']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     ing_cansino = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cansino']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     
-    # CÁLCULO DE CAPITAL TOTAL (Basado estrictamente en subtotales históricos sin IVA y descontando gastos sin IVA)
+    # CÁLCULO DE CAPITAL TOTAL (Subtotal Histórico Cobrado - Total Histórico Gastado)
     df_todos_pagados_hist = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     subtotal_hist_pagados = df_todos_pagados_hist['subtotal'].astype(float).sum() if not df_todos_pagados_hist.empty else 0.0
-    subtotal_hist_gastos = df_g['subtotal'].astype(float).sum() if not df_g.empty else 0.0
+    total_hist_gastos = df_g['total'].astype(float).sum() if not df_g.empty else 0.0
     
     capital_inicial = get_capital_inicial()
-    capital_total_actual = capital_inicial + subtotal_hist_pagados - subtotal_hist_gastos
+    capital_total_actual = capital_inicial + subtotal_hist_pagados - total_hist_gastos
     
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Cotizado (Total)", f"${cotizado_mes:,.2f}")
@@ -286,7 +287,7 @@ with tab_dash:
     
     c7, c8, c9, c10, c11, c12 = st.columns(6)
     c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", "sin IVA y sin gastos")
-    c8.metric("Gastos del Mes", f"${subtotal_gastos_mes:,.2f}")
+    c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
     c9.metric("Utilidad Neta (Pagados)", f"${utilidad_neta_pagados:,.2f}", "sin IVA")
     c10.metric("Utilidad Neta (Pagados sin Gastos)", f"${utilidad_neta_sin_gastos:,.2f}", "sin IVA")
     c11.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
@@ -310,7 +311,7 @@ with tab_dash:
         st.subheader("📈 Ingresos Cobrados vs Gastos del Mes")
         df_bar = pd.DataFrame({
             'Concepto': ['Utilidad Neta (Pagados)', 'Gastos del Mes', 'Utilidad Neta (sin Gastos)'],
-            'Monto': [utilidad_neta_pagados, subtotal_gastos_mes, utilidad_neta_sin_gastos]
+            'Monto': [utilidad_neta_pagados, gastos_totales_mes, utilidad_neta_sin_gastos]
         })
         st.bar_chart(df_bar.set_index('Concepto'))
             
