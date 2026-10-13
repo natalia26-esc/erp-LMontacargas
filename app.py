@@ -249,10 +249,11 @@ with tab_dash:
                 
     iva_gastos_mes = df_g_f['iva'].astype(float).sum() if not df_g_f.empty else 0.0
     subtotal_gastos_mes = df_g_f['subtotal'].astype(float).sum() if not df_g_f.empty else 0.0
-    gastos_totales_mes = df_g_f['total'].astype(float).sum() if not df_g_f.empty else 0.0
     
-    utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
-    comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
+    # Nuevas variables de Utilidad basadas estrictamente en subtotales
+    utilidad_neta_pagados = subtotal_ingresos_reales
+    utilidad_neta_sin_gastos = subtotal_ingresos_reales - subtotal_gastos_mes
+    comp_3_mes = utilidad_neta_sin_gastos * 0.03 if utilidad_neta_sin_gastos > 0 else 0.0
     
     fac_angel = 0.0
     fac_montalvo = 0.0
@@ -267,13 +268,13 @@ with tab_dash:
     ing_montalvo_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Montalvo']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     ing_cansino = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cansino']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     
+    # CÁLCULO DE CAPITAL TOTAL (Basado estrictamente en subtotales históricos sin IVA y descontando gastos sin IVA)
     df_todos_pagados_hist = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     subtotal_hist_pagados = df_todos_pagados_hist['subtotal'].astype(float).sum() if not df_todos_pagados_hist.empty else 0.0
     subtotal_hist_gastos = df_g['subtotal'].astype(float).sum() if not df_g.empty else 0.0
-    utilidad_historica_global = subtotal_hist_pagados - subtotal_hist_gastos
     
     capital_inicial = get_capital_inicial()
-    capital_total_actual = capital_inicial + utilidad_historica_global
+    capital_total_actual = capital_inicial + subtotal_hist_pagados - subtotal_hist_gastos
     
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Cotizado (Total)", f"${cotizado_mes:,.2f}")
@@ -283,12 +284,13 @@ with tab_dash:
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
     c6.metric("IVA del Mes (Cobrado)", f"${iva_total_mes:,.2f}", f"IVA Gastos: ${iva_gastos_mes:,.2f}")
     
-    c7, c8, c9, c10, c11 = st.columns(5)
-    c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
-    c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
-    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
-    c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
-    c11.metric("Trabajos del Mes", f"{num_trabajos_mes}")
+    c7, c8, c9, c10, c11, c12 = st.columns(6)
+    c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", "sin IVA y sin gastos")
+    c8.metric("Gastos del Mes", f"${subtotal_gastos_mes:,.2f}")
+    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_neta_pagados:,.2f}", "sin IVA")
+    c10.metric("Utilidad Neta (Pagados sin Gastos)", f"${utilidad_neta_sin_gastos:,.2f}", "sin IVA")
+    c11.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    c12.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     
     st.markdown("---")
     
@@ -307,8 +309,8 @@ with tab_dash:
     with col_g1:
         st.subheader("📈 Ingresos Cobrados vs Gastos del Mes")
         df_bar = pd.DataFrame({
-            'Concepto': ['Subtotal Cobrado', 'Subtotal Gastos', 'Utilidad Neta'],
-            'Monto': [subtotal_ingresos_reales, subtotal_gastos_mes, utilidad_mes]
+            'Concepto': ['Utilidad Neta (Pagados)', 'Gastos del Mes', 'Utilidad Neta (sin Gastos)'],
+            'Monto': [utilidad_neta_pagados, subtotal_gastos_mes, utilidad_neta_sin_gastos]
         })
         st.bar_chart(df_bar.set_index('Concepto'))
             
@@ -403,10 +405,8 @@ with tab_trabajos:
                     "fecha_pago": f_pago_str, "portal": portal
                 }
                 
-                # MODIFICADO: Bloque try-except para imprimir el error exacto en pantalla si falla
                 try:
                     res = supabase.table("trabajos").insert(data_trabajo).execute()
-                    # A veces Supabase devuelve un objeto sin error, pero con data vacía
                     st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
                     st.rerun()
                 except Exception as e:
@@ -553,8 +553,27 @@ with tab_gastos:
     
     df_g_raw = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
 
+    clientes_df = get_catalogo("cat_clientes")
+    lista_clientes = clientes_df['nombre'].tolist() if not clientes_df.empty else ["Sin Clientes"]
+    
+    cats_df = get_catalogo("cat_categorias")
+    lista_categorias = cats_df['nombre'].tolist() if not cats_df.empty else ["General"]
+    
+    subcats_df = get_catalogo("cat_subcategorias")
+    lista_subcategorias = subcats_df['nombre'].tolist() if not subcats_df.empty else ["General"]
+    
+    cuentas_df = get_catalogo("cat_cuentas")
+    lista_cuentas = ["-- Sin asignar --"] + (cuentas_df['nombre'].tolist() if not cuentas_df.empty else ["Efectivo"])
+    
     provs_df = get_catalogo("cat_proveedores")
     lista_proveedores = provs_df['nombre'].tolist() if not provs_df.empty else ["Sin Proveedores"]
+    
+    equipos_db = get_equipos_catalogo_tuples()
+    lista_equipos_strs = ["Sin equipo"] + ([f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else [])
+    
+    # Lista de trabajos para trazabilidad
+    t_list = pd.DataFrame(supabase.table("trabajos").select("id_personalizado, cliente, equipo").execute().data)
+    trabajos_opciones = ["Ninguno"] + [f"{r['id_personalizado']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
 
     with st.expander("➕ Registrar Nuevo Gasto", expanded=False):
         with st.form("form_gasto", clear_on_submit=True):
@@ -567,9 +586,6 @@ with tab_gastos:
             with gc2:
                 subcategoria_g = st.selectbox("Subcategoría Gasto", lista_subcategorias)
                 proveedor_g = st.selectbox("Proveedor", lista_proveedores)
-                
-                t_list = pd.DataFrame(supabase.table("trabajos").select("id_personalizado, cliente, equipo").execute().data)
-                trabajos_opciones = ["Ninguno"] + [f"{r['id_personalizado']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
                 trabajo_rel = st.selectbox("Trabajo Relacionado (Trazabilidad)", trabajos_opciones)
             with gc3:
                 folio_ticket = st.text_input("Folio de Ticket o Factura")
@@ -585,18 +601,105 @@ with tab_gastos:
                 id_gen_g = generar_id("ga", fecha_str)
                 eq_g_final = "" if equipo_g == "Sin equipo" else equipo_g
                 cta_g_final = "" if cuenta_g == "-- Sin asignar --" else cuenta_g
+                tr_g_final = "" if trabajo_rel == "Ninguno" else trabajo_rel
                 
                 gasto_data = {
                     "id_personalizado": id_gen_g, "fecha": fecha_str, "cliente": cliente_g,
                     "equipo": eq_g_final, "categoria": categoria_g, "subcategoria": subcategoria_g,
-                    "proveedor": proveedor_g, "trabajo_relacionado": trabajo_rel, "descripcion": desc_g,
+                    "proveedor": proveedor_g, "trabajo_relacionado": tr_g_final, "descripcion": desc_g,
                     "folio_ticket": folio_ticket, "metodo_pago": metodo_pago, "cuenta": cta_g_final,
                     "subtotal": float(sub_g), "iva": float(iva_g), "total": float(tot_g)
                 }
                 
-                supabase.table("gastos").insert(gasto_data).execute()
-                st.success(f"¡Gasto registrado con éxito! ID: {id_gen_g}")
-                st.rerun()
+                try:
+                    supabase.table("gastos").insert(gasto_data).execute()
+                    st.success(f"¡Gasto registrado con éxito! ID: {id_gen_g}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al guardar gasto en Supabase: {str(e)}")
+
+    if not df_g_raw.empty:
+        lista_ids_g = [str(x) for x in df_g_raw['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
+        with st.expander("✏️ Editar o 🗑️ Borrar Gasto Existente", expanded=False):
+            id_g_editar = st.selectbox("Selecciona el ID del Gasto a Editar/Borrar", lista_ids_g)
+            reg_g_actual = df_g_raw[df_g_raw['id_personalizado'] == id_g_editar].iloc[0]
+            
+            with st.form("form_editar_gasto"):
+                st.write(f"Editando Gasto: **{id_g_editar}**")
+                
+                egc1, egc2, egc3 = st.columns(3)
+                with egc1:
+                    val_cli = str(reg_g_actual.get('cliente', ''))
+                    idx_cli = lista_clientes.index(val_cli) if val_cli in lista_clientes else 0
+                    n_cliente_g = st.selectbox("Cliente Relacionado", lista_clientes, index=idx_cli)
+                    
+                    val_eq = str(reg_g_actual.get('equipo', ''))
+                    idx_eq = lista_equipos_strs.index(val_eq) if val_eq in lista_equipos_strs else 0
+                    n_equipo_g = st.selectbox("Equipo Relacionado", lista_equipos_strs, index=idx_eq)
+                    
+                    val_cat = str(reg_g_actual.get('categoria', ''))
+                    idx_cat = lista_categorias.index(val_cat) if val_cat in lista_categorias else 0
+                    n_categoria_g = st.selectbox("Categoría de Gasto", lista_categorias, index=idx_cat)
+                    
+                with egc2:
+                    val_subcat = str(reg_g_actual.get('subcategoria', ''))
+                    idx_subcat = lista_subcategorias.index(val_subcat) if val_subcat in lista_subcategorias else 0
+                    n_subcategoria_g = st.selectbox("Subcategoría Gasto", lista_subcategorias, index=idx_subcat)
+                    
+                    val_prov = str(reg_g_actual.get('proveedor', ''))
+                    idx_prov = lista_proveedores.index(val_prov) if val_prov in lista_proveedores else 0
+                    n_proveedor_g = st.selectbox("Proveedor", lista_proveedores, index=idx_prov)
+                    
+                    val_tr = str(reg_g_actual.get('trabajo_relacionado', ''))
+                    idx_tr = trabajos_opciones.index(val_tr) if val_tr in trabajos_opciones else 0
+                    n_trabajo_rel = st.selectbox("Trabajo Relacionado", trabajos_opciones, index=idx_tr)
+                    
+                with egc3:
+                    val_folio = str(reg_g_actual.get('folio_ticket', '')) if pd.notna(reg_g_actual.get('folio_ticket')) else ""
+                    n_folio_ticket = st.text_input("Folio de Ticket o Factura", value=val_folio)
+                    
+                    metodos_pago = ["Transferencia", "Efectivo", "Tarjeta"]
+                    val_mp = str(reg_g_actual.get('metodo_pago', ''))
+                    idx_mp = metodos_pago.index(val_mp) if val_mp in metodos_pago else 0
+                    n_metodo_pago = st.selectbox("Método de Pago", metodos_pago, index=idx_mp)
+                    
+                    val_cta = str(reg_g_actual.get('cuenta', ''))
+                    idx_cta = lista_cuentas.index(val_cta) if val_cta in lista_cuentas else 0
+                    n_cuenta_g = st.selectbox("Cuenta Gasto", lista_cuentas, index=idx_cta)
+                    
+                n_sub_g = st.number_input("Subtotal Gasto ($)", value=float(reg_g_actual.get('subtotal', 0.0)), step=0.01)
+                val_desc = str(reg_g_actual.get('descripcion', '')) if pd.notna(reg_g_actual.get('descripcion')) else ""
+                n_desc_g = st.text_area("Descripción / Detalle del Gasto", value=val_desc)
+                
+                col_btn_g1, col_btn_g2 = st.columns(2)
+                if col_btn_g1.form_submit_button("💾 Guardar Cambios"):
+                    n_iva_g = float(n_sub_g) * 0.16
+                    n_tot_g = float(n_sub_g) + n_iva_g
+                    
+                    eq_g_fin = "" if n_equipo_g == "Sin equipo" else n_equipo_g
+                    cta_g_fin = "" if n_cuenta_g == "-- Sin asignar --" else n_cuenta_g
+                    tr_g_fin = "" if n_trabajo_rel == "Ninguno" else n_trabajo_rel
+                    
+                    update_g_data = {
+                        "cliente": n_cliente_g, "equipo": eq_g_fin, "categoria": n_categoria_g,
+                        "subcategoria": n_subcategoria_g, "proveedor": n_proveedor_g,
+                        "trabajo_relacionado": tr_g_fin, "folio_ticket": n_folio_ticket,
+                        "metodo_pago": n_metodo_pago, "cuenta": cta_g_fin,
+                        "subtotal": float(n_sub_g), "iva": float(n_iva_g), "total": float(n_tot_g),
+                        "descripcion": n_desc_g
+                    }
+                    
+                    try:
+                        supabase.table("gastos").update(update_g_data).eq("id_personalizado", id_g_editar).execute()
+                        st.success("¡Gasto actualizado con éxito!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al actualizar gasto: {str(e)}")
+                        
+                if col_btn_g2.form_submit_button("🗑️ Eliminar Gasto"):
+                    supabase.table("gastos").delete().eq("id_personalizado", id_g_editar).execute()
+                    st.warning("Gasto eliminado.")
+                    st.rerun()
 
     st.markdown("---")
     st.subheader("📊 Historial de Gastos")
