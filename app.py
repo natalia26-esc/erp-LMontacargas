@@ -1,169 +1,75 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 import os
 import io
+import math
+from supabase import create_client, Client
 
 # Configuración de la página
 st.set_page_config(page_title="ERP Montacargas - Control Financiero", layout="wide")
 
-def init_db():
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trabajos (
-            id_personalizado TEXT PRIMARY KEY,
-            fecha TEXT NOT NULL,
-            cliente TEXT NOT NULL,
-            equipo TEXT,
-            modelo TEXT,
-            serie TEXT,
-            categoria TEXT,
-            subcategoria TEXT,
-            descripcion TEXT,
-            recibo_correctivo TEXT,
-            recibo_preventivo TEXT,
-            estado_trabajo TEXT,
-            estado_financiero TEXT,
-            cotizacion TEXT,
-            fecha_cotizacion TEXT,
-            oc TEXT,
-            fecha_oc TEXT,
-            factura TEXT,
-            fecha_factura TEXT,
-            facturado_por TEXT,
-            subtotal REAL,
-            iva REAL,
-            total REAL,
-            cuenta_deposito TEXT,
-            costo_fiscal REAL,
-            ingreso_neto REAL,
-            no_entrada TEXT,
-            fecha_entrada TEXT,
-            portal TEXT,
-            fecha_portal TEXT,
-            estado_pago TEXT,
-            fecha_pago TEXT,
-            fecha_pago_contador TEXT
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS gastos (
-            id_personalizado TEXT PRIMARY KEY,
-            fecha TEXT NOT NULL,
-            cliente TEXT,
-            equipo TEXT,
-            categoria TEXT,
-            subcategoria TEXT,
-            proveedor TEXT,
-            trabajo_relacionado TEXT,
-            descripcion TEXT,
-            folio_ticket TEXT,
-            metodo_pago TEXT,
-            cuenta TEXT,
-            subtotal REAL,
-            iva REAL,
-            total REAL
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS rentas (
-            id_personalizado TEXT PRIMARY KEY,
-            cliente TEXT NOT NULL,
-            equipo TEXT NOT NULL,
-            fecha_inicio TEXT NOT NULL,
-            fecha_fin TEXT NOT NULL,
-            monto REAL NOT NULL,
-            estado TEXT NOT NULL
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS config (
-            clave TEXT PRIMARY KEY,
-            valor REAL
-        )
-    ''')
-    
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_equipos (id INTEGER PRIMARY KEY AUTOINCREMENT, eco TEXT, marca TEXT, modelo TEXT, serie TEXT, cliente TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_categorias (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_subcategorias (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_proveedores (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS cat_cuentas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)')
-    
-    cursor.execute("SELECT COUNT(*) FROM cat_categorias")
-    if cursor.fetchone()[0] == 0:
-        for c in ["Mantenimiento", "Venta", "Renta", "Refacción", "Servicio Correctivo", "Servicio Preventivo"]:
-            cursor.execute("INSERT OR IGNORE INTO cat_categorias (nombre) VALUES (?)", (c,))
-            
-    cursor.execute("SELECT COUNT(*) FROM cat_cuentas")
-    if cursor.fetchone()[0] == 0:
-        for cu in ["Cuenta Llanez", "Cuenta Montalvo", "Efectivo", "Cansino"]:
-            cursor.execute("INSERT OR IGNORE INTO cat_cuentas (nombre) VALUES (?)", (cu,))
-            
-    conn.commit()
-    conn.close()
+# ==========================================
+# CONEXIÓN A SUPABASE
+# ==========================================
+@st.cache_resource
+def init_connection() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
-init_db()
+try:
+    supabase = init_connection()
+except Exception as e:
+    st.error(f"Error de conexión a Supabase: Verifica tus Secrets. Detalles: {e}")
+    st.stop()
 
+# ==========================================
+# FUNCIONES AUXILIARES
+# ==========================================
 def get_catalogo(tabla):
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    cursor.execute(f"SELECT * FROM {tabla}")
-    res = cursor.fetchall()
-    cols = [description[0] for description in cursor.description]
-    conn.close()
-    return pd.DataFrame(res, columns=cols) if res else pd.DataFrame()
+    res = supabase.table(tabla).select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
 def get_equipos_catalogo_df():
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM cat_equipos")
-    res = cursor.fetchall()
-    cols = [description[0] for description in cursor.description]
-    conn.close()
-    return pd.DataFrame(res, columns=cols) if res else pd.DataFrame()
+    return get_catalogo("cat_equipos")
 
 def get_equipos_catalogo_tuples():
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, eco, marca, modelo, serie, cliente FROM cat_equipos")
-    res = cursor.fetchall()
-    conn.close()
-    return res
+    res = supabase.table("cat_equipos").select("id, eco, marca, modelo, serie, cliente").execute()
+    if res.data:
+        # Convertimos a tuplas para mantener la compatibilidad con el resto de la app
+        return [(d['id'], d['eco'], d['marca'], d['modelo'], d['serie'], d['cliente']) for d in res.data]
+    return []
 
 def generar_id(tipo_prefijo, fecha_str):
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
-    fecha_formateada = dt_obj.strftime("%d%m%Y")
-    tabla = "trabajos" if tipo_prefijo == "tr" else ("gastos" if tipo_prefijo == "ga" else "rentas")
-    cursor.execute(f"SELECT COUNT(*) FROM {tabla}")
-    count = cursor.fetchone()[0]
-    conn.close()
-    return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
+    try:
+        dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
+        fecha_formateada = dt_obj.strftime("%d%m%Y")
+        tabla = "trabajos" if tipo_prefijo == "tr" else ("gastos" if tipo_prefijo == "ga" else "rentas")
+        
+        # Obtenemos el conteo exacto desde Supabase
+        res = supabase.table(tabla).select("id_personalizado", count="exact").execute()
+        count = res.count if res.count is not None else 0
+        return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
+    except Exception as e:
+        return f"{tipo_prefijo}_error_000"
 
 def get_capital_inicial():
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT valor FROM config WHERE clave = 'capital_inicial'")
-    res = cursor.fetchone()
-    conn.close()
-    return res[0] if res else 0.0
+    res = supabase.table("config").select("valor").eq("clave", "capital_inicial").execute()
+    if res.data:
+        return float(res.data[0]['valor'])
+    return 0.0
 
 def set_capital_inicial(monto):
-    conn = sqlite3.connect('erp_montacargas.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO config (clave, valor) VALUES ('capital_inicial', ?)", (monto,))
-    conn.commit()
-    conn.close()
+    supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
-# Encabezado con Logo y Título
+# Limpieza de nulos para exportar/importar
+def clean_df_for_supabase(df):
+    return df.where(pd.notnull(df), None)
+
+# ==========================================
+# ENCABEZADO
+# ==========================================
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
     if os.path.exists("logo.png"):
@@ -176,44 +82,75 @@ with col_logo:
 with col_title:
     st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
 
-# Botón de Respaldo Maestro Global en la barra lateral
+# ==========================================
+# BARRA LATERAL: RESPALDOS Y RESTAURACIÓN
+# ==========================================
 with st.sidebar:
     st.header("🛡️ Respaldo del Sistema")
-    st.write("Descarga todo tu ERP en un solo archivo de Excel organizado por pestañas:")
+    st.write("Descarga todo tu ERP en un solo archivo de Excel (Tus datos ya están seguros en la Nube):")
     
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_t_ex = pd.read_sql_query("SELECT * FROM trabajos", conn)
-    df_g_ex = pd.read_sql_query("SELECT * FROM gastos", conn)
-    df_r_ex = pd.read_sql_query("SELECT * FROM rentas", conn)
-    df_cli_ex = pd.read_sql_query("SELECT * FROM cat_clientes", conn)
-    df_eq_ex = pd.read_sql_query("SELECT * FROM cat_equipos", conn)
-    df_cat_ex = pd.read_sql_query("SELECT * FROM cat_categorias", conn)
-    df_sub_ex = pd.read_sql_query("SELECT * FROM cat_subcategorias", conn)
-    df_prov_ex = pd.read_sql_query("SELECT * FROM cat_proveedores", conn)
-    df_cta_ex = pd.read_sql_query("SELECT * FROM cat_cuentas", conn)
-    conn.close()
+    # 1. Exportar
+    df_t_ex = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
+    df_g_ex = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
+    df_r_ex = pd.DataFrame(supabase.table("rentas").select("*").execute().data)
+    df_cli_ex = pd.DataFrame(supabase.table("cat_clientes").select("*").execute().data)
+    df_eq_ex = pd.DataFrame(supabase.table("cat_equipos").select("*").execute().data)
+    df_cat_ex = pd.DataFrame(supabase.table("cat_categorias").select("*").execute().data)
+    df_sub_ex = pd.DataFrame(supabase.table("cat_subcategorias").select("*").execute().data)
+    df_prov_ex = pd.DataFrame(supabase.table("cat_proveedores").select("*").execute().data)
+    df_cta_ex = pd.DataFrame(supabase.table("cat_cuentas").select("*").execute().data)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_t_ex.to_excel(writer, sheet_name='Trabajos', index=False)
-        df_g_ex.to_excel(writer, sheet_name='Gastos', index=False)
-        df_r_ex.to_excel(writer, sheet_name='Rentas', index=False)
-        df_cli_ex.to_excel(writer, sheet_name='Clientes', index=False)
-        df_eq_ex.to_excel(writer, sheet_name='Equipos', index=False)
-        df_cat_ex.to_excel(writer, sheet_name='Categorias', index=False)
-        df_sub_ex.to_excel(writer, sheet_name='Subcategorias', index=False)
-        df_prov_ex.to_excel(writer, sheet_name='Proveedores', index=False)
-        df_cta_ex.to_excel(writer, sheet_name='Cuentas', index=False)
+        if not df_t_ex.empty: df_t_ex.to_excel(writer, sheet_name='Trabajos', index=False)
+        if not df_g_ex.empty: df_g_ex.to_excel(writer, sheet_name='Gastos', index=False)
+        if not df_r_ex.empty: df_r_ex.to_excel(writer, sheet_name='Rentas', index=False)
+        if not df_cli_ex.empty: df_cli_ex.to_excel(writer, sheet_name='Clientes', index=False)
+        if not df_eq_ex.empty: df_eq_ex.to_excel(writer, sheet_name='Equipos', index=False)
+        if not df_cat_ex.empty: df_cat_ex.to_excel(writer, sheet_name='Categorias', index=False)
+        if not df_sub_ex.empty: df_sub_ex.to_excel(writer, sheet_name='Subcategorias', index=False)
+        if not df_prov_ex.empty: df_prov_ex.to_excel(writer, sheet_name='Proveedores', index=False)
+        if not df_cta_ex.empty: df_cta_ex.to_excel(writer, sheet_name='Cuentas', index=False)
     
     excel_data = output.getvalue()
-    
     st.download_button(
-        label="📥 Descargar Respaldo Total (.xlsx)",
+        label="📥 Descargar Respaldo (.xlsx)",
         data=excel_data,
-        file_name=f"Respaldo_ERP_Montacargas_{datetime.today().strftime('%d%m%Y')}.xlsx",
+        file_name=f"Respaldo_Nube_ERP_{datetime.today().strftime('%d%m%Y')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+    st.markdown("---")
+    st.header("📤 Restaurar / Importar Excel")
+    st.write("Sube un respaldo antiguo para cargarlo a la nube:")
+    uploaded_file = st.file_uploader("Selecciona el archivo Excel", type=['xlsx'])
+    
+    if uploaded_file is not None:
+        if st.button("🚨 Cargar y Sobrescribir en Nube"):
+            xls = pd.ExcelFile(uploaded_file)
+            tablas_map = {
+                'Trabajos': 'trabajos', 'Gastos': 'gastos', 'Rentas': 'rentas',
+                'Clientes': 'cat_clientes', 'Equipos': 'cat_equipos',
+                'Categorias': 'cat_categorias', 'Subcategorias': 'cat_subcategorias',
+                'Proveedores': 'cat_proveedores', 'Cuentas': 'cat_cuentas'
+            }
+            try:
+                for sheet, table_name in tablas_map.items():
+                    if sheet in xls.sheet_names:
+                        df_sheet = pd.read_excel(xls, sheet_name=sheet)
+                        df_sheet = clean_df_for_supabase(df_sheet) # Limpia NaN
+                        records = df_sheet.to_dict(orient='records')
+                        if records:
+                            # Upsert actualiza los existentes o inserta nuevos
+                            supabase.table(table_name).upsert(records).execute()
+                st.success("¡Base de datos restaurada con éxito en Supabase!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al importar: {e}")
+
+# ==========================================
+# PESTAÑAS PRINCIPALES
+# ==========================================
 tab_dash, tab_trabajos, tab_gastos, tab_rentas, tab_config = st.tabs([
     "📊 Dashboard e Indicadores", 
     "💼 Trabajos y Operaciones", 
@@ -228,22 +165,19 @@ tab_dash, tab_trabajos, tab_gastos, tab_rentas, tab_config = st.tabs([
 with tab_dash:
     st.header("Panel Directivo de Indicadores")
     
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_t = pd.read_sql_query("SELECT * FROM trabajos", conn)
-    df_g = pd.read_sql_query("SELECT * FROM gastos", conn)
-    conn.close()
+    df_t = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
+    df_g = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
     
     col_m1, col_m2 = st.columns(2)
     anos_disponibles = [str(datetime.now().year)]
     if not df_t.empty:
         anos_t = pd.to_datetime(df_t['fecha'], errors='coerce').dt.year.dropna().unique()
-        anos_disponibles = sorted(list(set([str(y) for y in anos_t] + [str(datetime.now().year)])))
+        anos_disponibles = sorted(list(set([str(int(y)) for y in anos_t] + [str(datetime.now().year)])))
         
     anio_sel = col_m1.selectbox("Seleccionar Año", anos_disponibles, index=len(anos_disponibles)-1)
     
     meses_nombres = ["Todos", "01 - Enero", "02 - Febrero", "03 - Marzo", "04 - Abril", "05 - Mayo", "06 - Junio", 
                      "07 - Julio", "08 - Agosto", "09 - Septiembre", "10 - Octubre", "11 - Noviembre", "12 - Diciembre"]
-    
     mes_actual_num = datetime.now().month
     mes_sel = col_m2.selectbox("Seleccionar Mes", meses_nombres, index=mes_actual_num)
     
@@ -266,22 +200,28 @@ with tab_dash:
 
     num_trabajos_mes = len(df_t_f)
     
-    df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
-    cotizado_mes = df_cotizados_mes['total'].sum() if not df_cotizados_mes.empty else 0.0
-
-    df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
-    facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
-    num_facturas = df_facturados_mes.shape[0]
-    
-    df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
-    cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
-    
-    df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
-    pendiente_mes = df_pendientes_cobro['total'].sum() if not df_pendientes_cobro.empty else 0.0
-    
+    cotizado_mes = 0.0
+    facturado_mes = 0.0
+    num_facturas = 0
+    cobrado_mes = 0.0
+    pendiente_mes = 0.0
     costo_fiscal_mes = 0.0
     subtotal_ingresos_reales = 0.0
-    if not df_pagados_mes.empty:
+    
+    if not df_t_f.empty:
+        df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
+        cotizado_mes = df_cotizados_mes['total'].sum() if not df_cotizados_mes.empty else 0.0
+
+        df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
+        facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
+        num_facturas = df_facturados_mes.shape[0]
+        
+        df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
+        cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
+        
+        df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
+        pendiente_mes = df_pendientes_cobro['total'].sum() if not df_pendientes_cobro.empty else 0.0
+        
         for _, row in df_pagados_mes.iterrows():
             sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
             subtotal_ingresos_reales += sub_val
@@ -294,8 +234,8 @@ with tab_dash:
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
-    fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_facturados_mes.empty else 0.0
-    fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_facturados_mes.empty else 0.0
+    fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty and not df_facturados_mes.empty else 0.0
+    fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_t_f.empty and not df_facturados_mes.empty else 0.0
     
     df_todos_pagados = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
@@ -358,9 +298,7 @@ with tab_dash:
 with tab_trabajos:
     st.header("💼 Gestión de Trabajos y Operaciones")
     
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_t = pd.read_sql_query("SELECT * FROM trabajos", conn)
-    conn.close()
+    df_t = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
 
     clientes_df = get_catalogo("cat_clientes")
     lista_clientes = clientes_df['nombre'].tolist() if not clientes_df.empty else ["Sin Clientes"]
@@ -417,7 +355,7 @@ with tab_trabajos:
                 
                 portal = st.selectbox("Portal", ["Pendiente de Subir", "Sí", "No"])
 
-            if st.form_submit_button("Guardar Registro en el Sistema"):
+            if st.form_submit_button("Guardar Registro en la Nube"):
                 fecha_str = str(fecha_t)
                 id_gen = generar_id("tr", fecha_str)
                 eq_final = "" if equipo_sel == "Sin equipo" else equipo_sel
@@ -427,16 +365,25 @@ with tab_trabajos:
                 fac_por_final = "" if facturado_por == "-- Pendiente / Sin facturar --" else facturado_por
                 cta_final = "" if cuenta_dep == "-- Sin asignar --" else cuenta_dep
                 
-                conn = sqlite3.connect('erp_montacargas.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, modelo, serie, categoria, subcategoria, descripcion, recibo_correctivo, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, fecha_cotizacion, oc, fecha_oc, factura, facturado_por, subtotal, iva, total, cuenta_deposito, estado_pago, fecha_pago, portal)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen, fecha_str, cliente, eq_final, modelo, serie, categoria, subcategoria, descripcion, recibo_corr, recibo_preventivo, estado_trabajo, estado_financiero, cotizacion, f_cot_str, oc, f_oc_str, factura, fac_por_final, subtotal, iva, total, cta_final, estado_pago, f_pago_str, portal))
-                conn.commit()
-                conn.close()
-                st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
-                st.rerun()
+                data_trabajo = {
+                    "id_personalizado": id_gen, "fecha": fecha_str, "cliente": cliente,
+                    "equipo": eq_final, "modelo": modelo, "serie": serie, "categoria": categoria,
+                    "subcategoria": subcategoria, "descripcion": descripcion,
+                    "recibo_correctivo": recibo_corr, "recibo_preventivo": recibo_prev,
+                    "estado_trabajo": estado_trabajo, "estado_financiero": estado_financiero,
+                    "cotizacion": cotizacion, "fecha_cotizacion": f_cot_str, "oc": oc,
+                    "fecha_oc": f_oc_str, "factura": factura, "facturado_por": fac_por_final,
+                    "subtotal": float(subtotal), "iva": float(iva), "total": float(total),
+                    "cuenta_deposito": cta_final, "estado_pago": estado_pago,
+                    "fecha_pago": f_pago_str, "portal": portal
+                }
+                
+                try:
+                    supabase.table("trabajos").insert(data_trabajo).execute()
+                    st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
 
     if not df_t.empty:
         lista_ids = [str(x) for x in df_t['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
@@ -506,26 +453,20 @@ with tab_trabajos:
                     cta_fin = "" if nueva_cuenta == "-- Sin asignar --" else nueva_cuenta
                     f_pago_fin = str(nueva_fecha_pago) if nueva_fecha_pago else ""
                     
-                    conn = sqlite3.connect('erp_montacargas.db')
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        UPDATE trabajos SET estado_trabajo = ?, estado_financiero = ?, estado_pago = ?, 
-                                           facturado_por = ?, factura = ?, oc = ?, cuenta_deposito = ?, 
-                                           portal = ?, subtotal = ?, iva = ?, total = ?, fecha_pago = ?
-                        WHERE id_personalizado = ?
-                    ''', (nuevo_estatus_t, nuevo_estatus_f, nuevo_estatus_p, fac_por_fin, nueva_factura, 
-                          nueva_oc, cta_fin, nuevo_portal, nuevo_subtotal, nuevo_iva, nuevo_total, f_pago_fin, id_a_editar))
-                    conn.commit()
-                    conn.close()
+                    update_data = {
+                        "estado_trabajo": nuevo_estatus_t, "estado_financiero": nuevo_estatus_f, 
+                        "estado_pago": nuevo_estatus_p, "facturado_por": fac_por_fin, 
+                        "factura": nueva_factura, "oc": nueva_oc, "cuenta_deposito": cta_fin, 
+                        "portal": nuevo_portal, "subtotal": float(nuevo_subtotal), 
+                        "iva": float(nuevo_iva), "total": float(nuevo_total), "fecha_pago": f_pago_fin
+                    }
+                    
+                    supabase.table("trabajos").update(update_data).eq("id_personalizado", id_a_editar).execute()
                     st.success("¡Trabajo actualizado con éxito!")
                     st.rerun()
                     
                 if col_btn2.form_submit_button("🗑️ Eliminar Trabajo"):
-                    conn = sqlite3.connect('erp_montacargas.db')
-                    cursor = conn.cursor()
-                    cursor.execute('DELETE FROM trabajos WHERE id_personalizado = ?', (id_a_editar,))
-                    conn.commit()
-                    conn.close()
+                    supabase.table("trabajos").delete().eq("id_personalizado", id_a_editar).execute()
                     st.warning("Trabajo eliminado.")
                     st.rerun()
 
@@ -542,9 +483,7 @@ with tab_trabajos:
 with tab_gastos:
     st.header("💸 Gastos y Trazabilidad por Trabajo")
     
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_g = pd.read_sql_query("SELECT * FROM gastos", conn)
-    conn.close()
+    df_g = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
 
     provs_df = get_catalogo("cat_proveedores")
     lista_proveedores = provs_df['nombre'].tolist() if not provs_df.empty else ["Sin Proveedores"]
@@ -561,9 +500,7 @@ with tab_gastos:
                 subcategoria_g = st.selectbox("Subcategoría Gasto", lista_subcategorias)
                 proveedor_g = st.selectbox("Proveedor", lista_proveedores)
                 
-                conn = sqlite3.connect('erp_montacargas.db')
-                t_list = pd.read_sql_query("SELECT id_personalizado, cliente, equipo FROM trabajos", conn)
-                conn.close()
+                t_list = pd.DataFrame(supabase.table("trabajos").select("id_personalizado, cliente, equipo").execute().data)
                 trabajos_opciones = ["Ninguno"] + [f"{r['id_personalizado']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
                 trabajo_rel = st.selectbox("Trabajo Relacionado (Trazabilidad)", trabajos_opciones)
             with gc3:
@@ -581,14 +518,15 @@ with tab_gastos:
                 eq_g_final = "" if equipo_g == "Sin equipo" else equipo_g
                 cta_g_final = "" if cuenta_g == "-- Sin asignar --" else cuenta_g
                 
-                conn = sqlite3.connect('erp_montacargas.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO gastos (id_personalizado, fecha, cliente, equipo, categoria, subcategoria, proveedor, trabajo_relacionado, descripcion, folio_ticket, metodo_pago, cuenta, subtotal, iva, total)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (id_gen_g, fecha_str, cliente_g, eq_g_final, categoria_g, subcategoria_g, proveedor_g, trabajo_rel, desc_g, folio_ticket, metodo_pago, cta_g_final, sub_g, iva_g, tot_g))
-                conn.commit()
-                conn.close()
+                gasto_data = {
+                    "id_personalizado": id_gen_g, "fecha": fecha_str, "cliente": cliente_g,
+                    "equipo": eq_g_final, "categoria": categoria_g, "subcategoria": subcategoria_g,
+                    "proveedor": proveedor_g, "trabajo_relacionado": trabajo_rel, "descripcion": desc_g,
+                    "folio_ticket": folio_ticket, "metodo_pago": metodo_pago, "cuenta": cta_g_final,
+                    "subtotal": float(sub_g), "iva": float(iva_g), "total": float(tot_g)
+                }
+                
+                supabase.table("gastos").insert(gasto_data).execute()
                 st.success(f"¡Gasto registrado con éxito! ID: {id_gen_g}")
                 st.rerun()
 
@@ -604,11 +542,8 @@ with tab_gastos:
 # ==========================================
 with tab_rentas:
     st.header("🛞 Módulo de Control de Rentas")
-    st.write("Administra los equipos rentados, vigencias, montos y genera cotizaciones / trabajos automáticos cuando toque el pago.")
     
-    conn = sqlite3.connect('erp_montacargas.db')
-    df_rentas = pd.read_sql_query("SELECT * FROM rentas", conn)
-    conn.close()
+    df_rentas = pd.DataFrame(supabase.table("rentas").select("*").execute().data)
     
     with st.expander("➕ Registrar Nueva Renta", expanded=False):
         with st.form("form_renta", clear_on_submit=True):
@@ -628,14 +563,13 @@ with tab_rentas:
                 id_r = generar_id("rt", fecha_str)
                 eq_r_final = "" if eq_renta == "Sin equipo" else eq_renta
                 
-                conn = sqlite3.connect('erp_montacargas.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO rentas (id_personalizado, cliente, equipo, fecha_inicio, fecha_fin, monto, estado)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (id_r, cli_renta, eq_r_final, str(f_inicio), str(f_fin), monto_renta, estado_renta))
-                conn.commit()
-                conn.close()
+                renta_data = {
+                    "id_personalizado": id_r, "cliente": cli_renta, "equipo": eq_r_final,
+                    "fecha_inicio": str(f_inicio), "fecha_fin": str(f_fin), 
+                    "monto": float(monto_renta), "estado": estado_renta
+                }
+                
+                supabase.table("rentas").insert(renta_data).execute()
                 st.success(f"¡Renta registrada con éxito! ID: {id_r}")
                 st.rerun()
 
@@ -668,27 +602,25 @@ with tab_rentas:
                 if col_ra1.button("⚡ Generar Trabajo / Cotización de Renta", key=f"gen_trab_{row['id_personalizado']}"):
                     fecha_hoy_str = str(datetime.today().date())
                     id_nuevo_trabajo = generar_id("tr", fecha_hoy_str)
-                    subt = row['monto']
+                    subt = float(row['monto'])
                     iva_t = subt * 0.16
                     tot_t = subt + iva_t
                     desc_trabajo = f"Renta mensual de equipo {row['equipo']} correspondiente al periodo {row['fecha_inicio']} al {row['fecha_fin']}"
                     
-                    conn = sqlite3.connect('erp_montacargas.db')
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        INSERT INTO trabajos (id_personalizado, fecha, cliente, equipo, categoria, subcategoria, descripcion, estado_trabajo, estado_financiero, subtotal, iva, total, estado_pago)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (id_nuevo_trabajo, fecha_hoy_str, row['cliente'], row['equipo'], "Renta", "Renta Mensual", desc_trabajo, "Pendiente", "Por Cotizar", subt, iva_t, tot_t, "Pendiente"))
-                    conn.commit()
-                    conn.close()
+                    data_trab_renta = {
+                        "id_personalizado": id_nuevo_trabajo, "fecha": fecha_hoy_str, 
+                        "cliente": row['cliente'], "equipo": row['equipo'], 
+                        "categoria": "Renta", "subcategoria": "Renta Mensual", 
+                        "descripcion": desc_trabajo, "estado_trabajo": "Pendiente", 
+                        "estado_financiero": "Por Cotizar", "subtotal": subt, 
+                        "iva": iva_t, "total": tot_t, "estado_pago": "Pendiente"
+                    }
+                    
+                    supabase.table("trabajos").insert(data_trab_renta).execute()
                     st.success(f"¡Trabajo generado con éxito en Trabajos y Operaciones con ID: {id_nuevo_trabajo}!")
                 
                 if col_ra2.button("🗑️ Borrar Renta", key=f"del_renta_{row['id_personalizado']}"):
-                    conn = sqlite3.connect('erp_montacargas.db')
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM rentas WHERE id_personalizado = ?", (row['id_personalizado'],))
-                    conn.commit()
-                    conn.close()
+                    supabase.table("rentas").delete().eq("id_personalizado", row['id_personalizado']).execute()
                     st.warning("Renta eliminada.")
                     st.rerun()
     else:
@@ -709,15 +641,9 @@ with tab_config:
         
     st.markdown("---")
     st.subheader("🗂️ Gestión de Catálogos del Sistema")
-    st.write("Agrega, edita o elimina los elementos estandarizados para mantener limpios los menús desplegables.")
 
     sub_cat_tab1, sub_cat_tab2, sub_cat_tab3, sub_cat_tab4, sub_cat_tab5, sub_cat_tab6 = st.tabs([
-        "🏢 Clientes", 
-        "🚜 Equipos", 
-        "🏷️ Categorías", 
-        "📂 Subcategorías", 
-        "🤝 Proveedores", 
-        "💳 Cuentas"
+        "🏢 Clientes", "🚜 Equipos", "🏷️ Categorías", "📂 Subcategorías", "🤝 Proveedores", "💳 Cuentas"
     ])
 
     clients_df_tab = get_catalogo("cat_clientes")
@@ -725,21 +651,15 @@ with tab_config:
 
     # 1. CLIENTES
     with sub_cat_tab1:
-        st.subheader("Administrar Clientes")
         with st.form("add_cli", clear_on_submit=True):
             nuevo_cli = st.text_input("Nombre del Nuevo Cliente")
             if st.form_submit_button("Agregar Cliente"):
                 if nuevo_cli.strip():
                     try:
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO cat_clientes (nombre) VALUES (?)", (nuevo_cli.strip(),))
-                        conn.commit()
-                        conn.close()
+                        supabase.table("cat_clientes").insert({"nombre": nuevo_cli.strip()}).execute()
                         st.success("¡Cliente agregado!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("El cliente ya existe.")
+                    except Exception: st.error("El cliente ya existe o hubo un error.")
         
         st.markdown("---")
         if not clients_df_tab.empty:
@@ -749,27 +669,17 @@ with tab_config:
                     with st.form(f"form_edit_cli_{cid}"):
                         edit_cname = st.text_input("Modificar Nombre", value=cname)
                         col_eb1, col_eb2 = st.columns(2)
-                        if col_eb1.form_submit_button("💾 Guardar Cambios"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_clientes SET nombre = ? WHERE id = ?", (edit_cname.strip(), cid))
-                            conn.commit()
-                            conn.close()
+                        if col_eb1.form_submit_button("💾 Guardar"):
+                            supabase.table("cat_clientes").update({"nombre": edit_cname.strip()}).eq("id", cid).execute()
                             st.success("¡Actualizado!")
                             st.rerun()
                         if col_eb2.form_submit_button("🗑️ Borrar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_clientes WHERE id = ?", (cid,))
-                            conn.commit()
-                            conn.close()
-                            st.warning("Eliminado.")
+                            supabase.table("cat_clientes").delete().eq("id", cid).execute()
                             st.rerun()
 
     # 2. EQUIPOS (Económico opcional / flexible)
     with sub_cat_tab2:
-        st.subheader("Administrar Equipos")
-        with st.form("add_equipo_form_master_v3", clear_on_submit=True):
+        with st.form("add_equipo_form_master_nube", clear_on_submit=True):
             eq_eco = st.text_input("Número Económico / Identificador (Opcional)")
             eq_marca = st.text_input("Marca (Ej. Mitsubishi, Toyota)")
             eq_modelo = st.text_input("Modelo")
@@ -778,20 +688,18 @@ with tab_config:
             
             if st.form_submit_button("Registrar Nuevo Equipo"):
                 eco_final = eq_eco.strip() if eq_eco.strip() else "S/N"
-                conn = sqlite3.connect('erp_montacargas.db')
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO cat_equipos (eco, marca, modelo, serie, cliente) VALUES (?, ?, ?, ?, ?)", 
-                               (eco_final, eq_marca.strip(), eq_modelo.strip(), eq_serie.strip(), eq_cliente))
-                conn.commit()
-                conn.close()
-                st.success("¡Equipo registrado correctamente!")
+                supabase.table("cat_equipos").insert({
+                    "eco": eco_final, "marca": eq_marca.strip(), 
+                    "modelo": eq_modelo.strip(), "serie": eq_serie.strip(), "cliente": eq_cliente
+                }).execute()
+                st.success("¡Equipo registrado en la Nube correctamente!")
                 st.rerun()
         
         st.markdown("---")
         eqs_df_tab = get_equipos_catalogo_df()
         if not eqs_df_tab.empty:
             for _, e in eqs_df_tab.iterrows():
-                eq_id = e['id'] if 'id' in e else e.get('ID', 0)
+                eq_id = e['id']
                 eco_display = e['eco'] if pd.notna(e['eco']) and str(e['eco']).strip() != "" else "S/N"
                 with st.expander(f"Eco: {eco_display} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
                     with st.form(f"form_edit_eq_{eq_id}"):
@@ -804,42 +712,28 @@ with tab_config:
                         ed_cli = st.selectbox("Cliente", clients_for_eq, index=idx_cli, key=f"sel_cli_eq_{eq_id}")
                         
                         col_eq1, col_eq2 = st.columns(2)
-                        if col_eq1.form_submit_button("💾 Guardar Cambios"):
+                        if col_eq1.form_submit_button("💾 Guardar"):
                             eco_edit_final = ed_eco.strip() if ed_eco.strip() else "S/N"
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_equipos SET eco=?, marca=?, modelo=?, serie=?, cliente=? WHERE id=?", 
-                                           (eco_edit_final, ed_marca.strip(), ed_modelo.strip(), ed_serie.strip(), ed_cli, eq_id))
-                            conn.commit()
-                            conn.close()
-                            st.success("¡Equipo actualizado con éxito!")
+                            supabase.table("cat_equipos").update({
+                                "eco": eco_edit_final, "marca": ed_marca.strip(), 
+                                "modelo": ed_modelo.strip(), "serie": ed_serie.strip(), "cliente": ed_cli
+                            }).eq("id", eq_id).execute()
+                            st.success("¡Equipo actualizado!")
                             st.rerun()
-                        if col_eq2.form_submit_button("🗑️ Borrar Equipo"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_equipos WHERE id = ?", (eq_id,))
-                            conn.commit()
-                            conn.close()
-                            st.warning("Equipo eliminado.")
+                        if col_eq2.form_submit_button("🗑️ Borrar"):
+                            supabase.table("cat_equipos").delete().eq("id", eq_id).execute()
                             st.rerun()
 
     # 3. CATEGORÍAS
     with sub_cat_tab3:
-        st.subheader("Administrar Categorías")
         with st.form("add_cat", clear_on_submit=True):
             n_cat = st.text_input("Nueva Categoría")
             if st.form_submit_button("Agregar Categoría"):
                 if n_cat.strip():
                     try:
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO cat_categorias (nombre) VALUES (?)", (n_cat.strip(),))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Categoría agregada!")
+                        supabase.table("cat_categorias").insert({"nombre": n_cat.strip()}).execute()
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Ya existe.")
+                    except Exception: st.error("Ya existe.")
         st.markdown("---")
         cats_df_tab = get_catalogo("cat_categorias")
         if not cats_df_tab.empty:
@@ -850,37 +744,22 @@ with tab_config:
                         ed_cname = st.text_input("Modificar", value=cname)
                         cb1, cb2 = st.columns(2)
                         if cb1.form_submit_button("💾 Guardar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_categorias SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_categorias").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
                             st.rerun()
                         if cb2.form_submit_button("🗑️ Borrar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_categorias WHERE id=?", (cid,))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_categorias").delete().eq("id", cid).execute()
                             st.rerun()
 
     # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
-        st.subheader("Administrar Subcategorías")
         with st.form("add_subcat", clear_on_submit=True):
             n_sub = st.text_input("Nueva Subcategoría")
             if st.form_submit_button("Agregar Subcategoría"):
                 if n_sub.strip():
                     try:
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO cat_subcategorias (nombre) VALUES (?)", (n_sub.strip(),))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Agregada!")
+                        supabase.table("cat_subcategorias").insert({"nombre": n_sub.strip()}).execute()
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Ya existe.")
+                    except Exception: st.error("Ya existe.")
         st.markdown("---")
         sub_df_tab = get_catalogo("cat_subcategorias")
         if not sub_df_tab.empty:
@@ -891,37 +770,22 @@ with tab_config:
                         ed_sname = st.text_input("Modificar", value=cname)
                         sb1, sb2 = st.columns(2)
                         if sb1.form_submit_button("💾 Guardar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_subcategorias SET nombre=? WHERE id=?", (ed_sname.strip(), cid))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_subcategorias").update({"nombre": ed_sname.strip()}).eq("id", cid).execute()
                             st.rerun()
                         if sb2.form_submit_button("🗑️ Borrar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_subcategorias WHERE id=?", (cid,))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_subcategorias").delete().eq("id", cid).execute()
                             st.rerun()
 
     # 5. PROVEEDORES
     with sub_cat_tab5:
-        st.subheader("Administrar Proveedores")
         with st.form("add_prov", clear_on_submit=True):
             n_prov = st.text_input("Nombre del Proveedor")
             if st.form_submit_button("Agregar Proveedor"):
                 if n_prov.strip():
                     try:
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO cat_proveedores (nombre) VALUES (?)", (n_prov.strip(),))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Agregado!")
+                        supabase.table("cat_proveedores").insert({"nombre": n_prov.strip()}).execute()
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Ya existe.")
+                    except Exception: st.error("Ya existe.")
         st.markdown("---")
         prov_df_tab = get_catalogo("cat_proveedores")
         if not prov_df_tab.empty:
@@ -932,37 +796,22 @@ with tab_config:
                         ed_pname = st.text_input("Modificar", value=cname)
                         pb1, pb2 = st.columns(2)
                         if pb1.form_submit_button("💾 Guardar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_proveedores SET nombre=? WHERE id=?", (ed_pname.strip(), cid))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_proveedores").update({"nombre": ed_pname.strip()}).eq("id", cid).execute()
                             st.rerun()
                         if pb2.form_submit_button("🗑️ Borrar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_proveedores WHERE id=?", (cid,))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_proveedores").delete().eq("id", cid).execute()
                             st.rerun()
 
     # 6. CUENTAS
     with sub_cat_tab6:
-        st.subheader("Administrar Cuentas / Bancos")
         with st.form("add_cta", clear_on_submit=True):
             n_cta = st.text_input("Nombre de la Cuenta o Método")
             if st.form_submit_button("Agregar Cuenta"):
                 if n_cta.strip():
                     try:
-                        conn = sqlite3.connect('erp_montacargas.db')
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO cat_cuentas (nombre) VALUES (?)", (n_cta.strip(),))
-                        conn.commit()
-                        conn.close()
-                        st.success("¡Agregado!")
+                        supabase.table("cat_cuentas").insert({"nombre": n_cta.strip()}).execute()
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Ya existe.")
+                    except Exception: st.error("Ya existe.")
         st.markdown("---")
         cta_df_tab = get_catalogo("cat_cuentas")
         if not cta_df_tab.empty:
@@ -973,16 +822,8 @@ with tab_config:
                         ed_cname = st.text_input("Modificar", value=cname)
                         cb1, cb2 = st.columns(2)
                         if cb1.form_submit_button("💾 Guardar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE cat_cuentas SET nombre=? WHERE id=?", (ed_cname.strip(), cid))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_cuentas").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
                             st.rerun()
                         if cb2.form_submit_button("🗑️ Borrar"):
-                            conn = sqlite3.connect('erp_montacargas.db')
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM cat_cuentas WHERE id=?", (cid,))
-                            conn.commit()
-                            conn.close()
+                            supabase.table("cat_cuentas").delete().eq("id", cid).execute()
                             st.rerun()
