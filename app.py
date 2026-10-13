@@ -37,7 +37,6 @@ def get_equipos_catalogo_df():
 def get_equipos_catalogo_tuples():
     res = supabase.table("cat_equipos").select("id, eco, marca, modelo, serie, cliente").execute()
     if res.data:
-        # Convertimos a tuplas para mantener la compatibilidad con el resto de la app
         return [(d['id'], d['eco'], d['marca'], d['modelo'], d['serie'], d['cliente']) for d in res.data]
     return []
 
@@ -46,8 +45,6 @@ def generar_id(tipo_prefijo, fecha_str):
         dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
         fecha_formateada = dt_obj.strftime("%d%m%Y")
         tabla = "trabajos" if tipo_prefijo == "tr" else ("gastos" if tipo_prefijo == "ga" else "rentas")
-        
-        # Obtenemos el conteo exacto desde Supabase
         res = supabase.table(tabla).select("id_personalizado", count="exact").execute()
         count = res.count if res.count is not None else 0
         return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
@@ -63,7 +60,6 @@ def get_capital_inicial():
 def set_capital_inicial(monto):
     supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
-# Limpieza de nulos para exportar/importar
 def clean_df_for_supabase(df):
     return df.where(pd.notnull(df), None)
 
@@ -83,13 +79,12 @@ with col_title:
     st.title("🚜 ERP Ángel & Montalvo - Control de Montacargas")
 
 # ==========================================
-# BARRA LATERAL: RESPALDOS Y RESTAURACIÓN
+# BARRA LATERAL (Respaldo en la nube)
 # ==========================================
 with st.sidebar:
     st.header("🛡️ Respaldo del Sistema")
-    st.write("Descarga todo tu ERP en un solo archivo de Excel (Tus datos ya están seguros en la Nube):")
+    st.write("Descarga todo tu ERP en Excel:")
     
-    # 1. Exportar
     df_t_ex = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
     df_g_ex = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
     df_r_ex = pd.DataFrame(supabase.table("rentas").select("*").execute().data)
@@ -122,7 +117,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("📤 Restaurar / Importar Excel")
-    st.write("Sube un respaldo antiguo para cargarlo a la nube:")
     uploaded_file = st.file_uploader("Selecciona el archivo Excel", type=['xlsx'])
     
     if uploaded_file is not None:
@@ -138,10 +132,9 @@ with st.sidebar:
                 for sheet, table_name in tablas_map.items():
                     if sheet in xls.sheet_names:
                         df_sheet = pd.read_excel(xls, sheet_name=sheet)
-                        df_sheet = clean_df_for_supabase(df_sheet) # Limpia NaN
+                        df_sheet = clean_df_for_supabase(df_sheet)
                         records = df_sheet.to_dict(orient='records')
                         if records:
-                            # Upsert actualiza los existentes o inserta nuevos
                             supabase.table(table_name).upsert(records).execute()
                 st.success("¡Base de datos restaurada con éxito en Supabase!")
                 st.rerun()
@@ -171,7 +164,8 @@ with tab_dash:
     col_m1, col_m2 = st.columns(2)
     anos_disponibles = [str(datetime.now().year)]
     if not df_t.empty:
-        anos_t = pd.to_datetime(df_t['fecha'], errors='coerce').dt.year.dropna().unique()
+        df_t['fecha_dt'] = pd.to_datetime(df_t['fecha'], errors='coerce')
+        anos_t = df_t['fecha_dt'].dt.year.dropna().unique()
         anos_disponibles = sorted(list(set([str(int(y)) for y in anos_t] + [str(datetime.now().year)])))
         
     anio_sel = col_m1.selectbox("Seleccionar Año", anos_disponibles, index=len(anos_disponibles)-1)
@@ -181,17 +175,19 @@ with tab_dash:
     mes_actual_num = datetime.now().month
     mes_sel = col_m2.selectbox("Seleccionar Mes", meses_nombres, index=mes_actual_num)
     
-    df_t_f = df_t.copy()
-    df_g_f = df_g.copy()
+    df_t_f = pd.DataFrame()
+    df_g_f = pd.DataFrame()
     
-    if not df_t_f.empty:
+    if not df_t.empty:
+        df_t_f = df_t.copy()
         df_t_f['dt'] = pd.to_datetime(df_t_f['fecha'], errors='coerce')
         df_t_f = df_t_f[df_t_f['dt'].dt.year == int(anio_sel)]
         if mes_sel != "Todos":
             num_mes = int(mes_sel.split(" - ")[0])
             df_t_f = df_t_f[df_t_f['dt'].dt.month == num_mes]
             
-    if not df_g_f.empty:
+    if not df_g.empty:
+        df_g_f = df_g.copy()
         df_g_f['dt'] = pd.to_datetime(df_g_f['fecha'], errors='coerce')
         df_g_f = df_g_f[df_g_f['dt'].dt.year == int(anio_sel)]
         if mes_sel != "Todos":
@@ -207,44 +203,58 @@ with tab_dash:
     pendiente_mes = 0.0
     costo_fiscal_mes = 0.0
     subtotal_ingresos_reales = 0.0
+    iva_total_mes = 0.0
     
     if not df_t_f.empty:
+        # Cotizado
         df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
-        cotizado_mes = df_cotizados_mes['total'].sum() if not df_cotizados_mes.empty else 0.0
+        cotizado_mes = df_cotizados_mes['subtotal'].astype(float).sum() if not df_cotizados_mes.empty else 0.0
 
+        # Facturado
         df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
-        facturado_mes = df_facturados_mes['total'].sum() if not df_facturados_mes.empty else 0.0
+        facturado_mes = df_facturados_mes['total'].astype(float).sum() if not df_facturados_mes.empty else 0.0
         num_facturas = df_facturados_mes.shape[0]
         
+        # Pagado
         df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
-        cobrado_mes = df_pagados_mes['total'].sum() if not df_pagados_mes.empty else 0.0
+        cobrado_mes = df_pagados_mes['total'].astype(float).sum() if not df_pagados_mes.empty else 0.0
         
+        # Pendiente de cobro
         df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
-        pendiente_mes = df_pendientes_cobro['total'].sum() if not df_pendientes_cobro.empty else 0.0
+        pendiente_mes = df_pendientes_cobro['total'].astype(float).sum() if not df_pendientes_cobro.empty else 0.0
         
+        # Iterar sobre los pagados para Utilidad, Costo Fiscal y sumatoria de IVA
         for _, row in df_pagados_mes.iterrows():
             sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
+            iva_val = float(row.get('iva', 0.0)) if pd.notna(row.get('iva')) else 0.0
             subtotal_ingresos_reales += sub_val
-            if row.get('cuenta_deposito') == 'Cansino':
+            iva_total_mes += iva_val
+            if str(row.get('cuenta_deposito')).strip() == 'Cansino':
                 costo_fiscal_mes += sub_val * 0.08
-    
-    subtotal_gastos_mes = df_g_f['subtotal'].sum() if not df_g_f.empty else 0.0
-    gastos_totales_mes = df_g_f['total'].sum() if not df_g_f.empty else 0.0
+                
+    iva_gastos_mes = df_g_f['iva'].astype(float).sum() if not df_g_f.empty else 0.0
+    subtotal_gastos_mes = df_g_f['subtotal'].astype(float).sum() if not df_g_f.empty else 0.0
+    gastos_totales_mes = df_g_f['total'].astype(float).sum() if not df_g_f.empty else 0.0
     
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
-    fac_angel = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Angel Llanez']['total'].sum() if not df_t_f.empty and not df_facturados_mes.empty else 0.0
-    fac_montalvo = df_facturados_mes[df_facturados_mes['facturado_por'] == 'Adolfo Montalvo']['total'].sum() if not df_t_f.empty and not df_facturados_mes.empty else 0.0
+    fac_angel = 0.0
+    fac_montalvo = 0.0
+    if not df_t_f.empty:
+        df_socios = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado'])]
+        if not df_socios.empty:
+            fac_angel = df_socios[df_socios['facturado_por'] == 'Angel Llanez']['total'].astype(float).sum()
+            fac_montalvo = df_socios[df_socios['facturado_por'] == 'Adolfo Montalvo']['total'].astype(float).sum()
     
     df_todos_pagados = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
-    ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
-    ing_montalvo_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Montalvo']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
-    ing_cansino = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cansino']['subtotal'].sum() if not df_todos_pagados.empty else 0.0
+    ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
+    ing_montalvo_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Montalvo']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
+    ing_cansino = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cansino']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
     
     capital_inicial = get_capital_inicial()
-    subtotal_hist_pagados = df_todos_pagados['subtotal'].sum() if not df_todos_pagados.empty else 0.0
-    subtotal_hist_gastos = df_g['subtotal'].sum() if not df_g.empty else 0.0
+    subtotal_hist_pagados = df_todos_pagados['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
+    subtotal_hist_gastos = df_g['subtotal'].astype(float).sum() if not df_g.empty else 0.0
     utilidad_historica_global = subtotal_hist_pagados - subtotal_hist_gastos
     capital_total_actual = capital_inicial + utilidad_historica_global
     
@@ -270,9 +280,11 @@ with tab_dash:
     sc2.metric("Facturado por Adolfo Montalvo (AM)", f"${fac_montalvo:,.2f}")
     sc3.metric("Ingresos en Cuenta Cansino", f"${ing_cansino:,.2f}")
 
-    sc4, sc5, _ = st.columns(3)
+    sc4, sc5, sc6 = st.columns(3)
     sc4.metric("Ingresado (Cuenta Llanez)", f"${ing_angel_cuenta:,.2f}")
     sc5.metric("Ingresado (Cuenta Montalvo)", f"${ing_montalvo_cuenta:,.2f}")
+    # Nueva métrica de IVA
+    sc6.metric("IVA Total del Mes (Cobrado)", f"${iva_total_mes:,.2f}", f"IVA Gastos: ${iva_gastos_mes:,.2f}")
 
     st.markdown("---")
     col_g1, col_g2 = st.columns(2)
@@ -298,7 +310,7 @@ with tab_dash:
 with tab_trabajos:
     st.header("💼 Gestión de Trabajos y Operaciones")
     
-    df_t = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
+    df_t_raw = pd.DataFrame(supabase.table("trabajos").select("*").execute().data)
 
     clientes_df = get_catalogo("cat_clientes")
     lista_clientes = clientes_df['nombre'].tolist() if not clientes_df.empty else ["Sin Clientes"]
@@ -335,12 +347,11 @@ with tab_trabajos:
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
                 cotizacion = st.text_input("Cotización No. (Opcional)")
                 
-                usar_f_cot = st.checkbox("¿Incluir Fecha Cotización?", value=True)
-                fecha_cot = st.date_input("Fecha Cotización", value=datetime.today()) if usar_f_cot else None
-                
+                # Fechas arregladas (Opcionales con value=None)
+                fecha_cot = st.date_input("Fecha Cotización (Opcional)", value=None, key="fcot_add")
                 oc = st.text_input("O.C. (Opcional)")
-                usar_f_oc = st.checkbox("¿Incluir Fecha O.C.?", value=False)
-                fecha_oc = st.date_input("Fecha O.C.", value=datetime.today()) if usar_f_oc else None
+                fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=None, key="foc_add")
+                
             with tc4:
                 factura = st.text_input("Factura (Opcional)")
                 facturado_por = st.selectbox("Facturado Por", ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"])
@@ -350,18 +361,18 @@ with tab_trabajos:
                 cuenta_dep = st.selectbox("Cuenta donde se depositó", lista_cuentas)
                 estado_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"])
                 
-                usar_f_pago = st.checkbox("¿Incluir Fecha de Pago?", value=False)
-                fecha_pago = st.date_input("Fecha de Pago", value=datetime.today()) if usar_f_pago else None
-                
+                fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=None, key="fpago_add")
                 portal = st.selectbox("Portal", ["Pendiente de Subir", "Sí", "No"])
 
             if st.form_submit_button("Guardar Registro en la Nube"):
                 fecha_str = str(fecha_t)
                 id_gen = generar_id("tr", fecha_str)
                 eq_final = "" if equipo_sel == "Sin equipo" else equipo_sel
-                f_cot_str = str(fecha_cot) if fecha_cot else ""
-                f_oc_str = str(fecha_oc) if fecha_oc else ""
-                f_pago_str = str(fecha_pago) if fecha_pago else ""
+                
+                f_cot_str = str(fecha_cot) if fecha_cot is not None else ""
+                f_oc_str = str(fecha_oc) if fecha_oc is not None else ""
+                f_pago_str = str(fecha_pago) if fecha_pago is not None else ""
+                
                 fac_por_final = "" if facturado_por == "-- Pendiente / Sin facturar --" else facturado_por
                 cta_final = "" if cuenta_dep == "-- Sin asignar --" else cuenta_dep
                 
@@ -385,11 +396,11 @@ with tab_trabajos:
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")
 
-    if not df_t.empty:
-        lista_ids = [str(x) for x in df_t['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
+    if not df_t_raw.empty:
+        lista_ids = [str(x) for x in df_t_raw['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
         with st.expander("✏️ Editar o 🗑️ Borrar Trabajo Existente", expanded=False):
             id_a_editar = st.selectbox("Selecciona el ID del Trabajo a Editar/Borrar", lista_ids)
-            registro_actual = df_t[df_t['id_personalizado'] == id_a_editar].iloc[0]
+            registro_actual = df_t_raw[df_t_raw['id_personalizado'] == id_a_editar].iloc[0]
             
             with st.form("form_editar_trabajo"):
                 st.write(f"Editando Registro: **{id_a_editar}**")
@@ -397,61 +408,60 @@ with tab_trabajos:
                 ec1, ec2, ec3 = st.columns(3)
                 with ec1:
                     est_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"]
-                    val_t = registro_actual['estado_trabajo']
+                    val_t = str(registro_actual['estado_trabajo'])
                     idx_t = est_t_opts.index(val_t) if val_t in est_t_opts else 0
                     nuevo_estatus_t = st.selectbox("Estado de Trabajo", est_t_opts, index=idx_t)
 
                     est_f_opts = ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"]
-                    val_f = registro_actual['estado_financiero']
+                    val_f = str(registro_actual['estado_financiero'])
                     idx_f = est_f_opts.index(val_f) if val_f in est_f_opts else 0
                     nuevo_estatus_f = st.selectbox("Estado Financiero", est_f_opts, index=idx_f)
 
                     est_p_opts = ["Pendiente", "Pagado", "Parcial"]
-                    val_p = registro_actual['estado_pago']
+                    val_p = str(registro_actual['estado_pago'])
                     idx_p = est_p_opts.index(val_p) if val_p in est_p_opts else 0
                     nuevo_estatus_p = st.selectbox("Estado de Pago", est_p_opts, index=idx_p)
                 
                 with ec2:
                     fac_opts = ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"]
-                    val_fac = registro_actual['facturado_por'] if pd.notna(registro_actual['facturado_por']) and registro_actual['facturado_por'] != '' else "-- Pendiente / Sin facturar --"
+                    val_fac = str(registro_actual['facturado_por']) if pd.notna(registro_actual['facturado_por']) and registro_actual['facturado_por'] != '' else "-- Pendiente / Sin facturar --"
                     idx_fac = fac_opts.index(val_fac) if val_fac in fac_opts else 0
                     nuevo_fac_por = st.selectbox("Facturado Por", fac_opts, index=idx_fac)
 
-                    val_factura_txt = registro_actual['factura'] if pd.notna(registro_actual['factura']) else ""
+                    val_factura_txt = str(registro_actual['factura']) if pd.notna(registro_actual['factura']) else ""
                     nueva_factura = st.text_input("Factura No.", value=val_factura_txt)
 
-                    val_oc_txt = registro_actual['oc'] if pd.notna(registro_actual['oc']) else ""
+                    val_oc_txt = str(registro_actual['oc']) if pd.notna(registro_actual['oc']) else ""
                     nueva_oc = st.text_input("O.C.", value=val_oc_txt)
                 
                 with ec3:
-                    val_cta = registro_actual['cuenta_deposito'] if pd.notna(registro_actual['cuenta_deposito']) and registro_actual['cuenta_deposito'] != '' else "-- Sin asignar --"
+                    val_cta = str(registro_actual['cuenta_deposito']) if pd.notna(registro_actual['cuenta_deposito']) and str(registro_actual['cuenta_deposito']).strip() != '' else "-- Sin asignar --"
                     idx_cta = lista_cuentas.index(val_cta) if val_cta in lista_cuentas else 0
                     nueva_cuenta = st.selectbox("Cuenta donde se depositó", lista_cuentas, index=idx_cta)
 
                     portal_opts = ["Pendiente de Subir", "Sí", "No"]
-                    val_portal = registro_actual['portal'] if pd.notna(registro_actual['portal']) else "Pendiente de Subir"
+                    val_portal = str(registro_actual['portal']) if pd.notna(registro_actual['portal']) else "Pendiente de Subir"
                     idx_portal = portal_opts.index(val_portal) if val_portal in portal_opts else 0
                     nuevo_portal = st.selectbox("Portal", portal_opts, index=idx_portal)
 
                     sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
                     nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
 
-                    val_fp_ant = registro_actual['fecha_pago'] if pd.notna(registro_actual['fecha_pago']) and registro_actual['fecha_pago'] != '' else str(datetime.today().date())
+                    val_fp_ant = str(registro_actual['fecha_pago']) if pd.notna(registro_actual['fecha_pago']) and str(registro_actual['fecha_pago']).strip() != '' else None
                     try:
-                        dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date()
+                        dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date() if val_fp_ant else None
                     except:
-                        dt_fp = datetime.today().date()
+                        dt_fp = None
                     
-                    usar_f_pago_ed = st.checkbox("¿Actualizar / Incluir Fecha de Pago?", value=bool(val_fp_ant))
-                    nueva_fecha_pago = st.date_input("Fecha de Pago", value=dt_fp) if usar_f_pago_ed else ""
+                    nueva_fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=dt_fp, key="fpago_edit")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 if col_btn1.form_submit_button("💾 Guardar Cambios"):
-                    nuevo_iva = nuevo_subtotal * 0.16
-                    nuevo_total = nuevo_subtotal + nuevo_iva
+                    nuevo_iva = float(nuevo_subtotal) * 0.16
+                    nuevo_total = float(nuevo_subtotal) + nuevo_iva
                     fac_por_fin = "" if nuevo_fac_por == "-- Pendiente / Sin facturar --" else nuevo_fac_por
                     cta_fin = "" if nueva_cuenta == "-- Sin asignar --" else nueva_cuenta
-                    f_pago_fin = str(nueva_fecha_pago) if nueva_fecha_pago else ""
+                    f_pago_fin = str(nueva_fecha_pago) if nueva_fecha_pago is not None else ""
                     
                     update_data = {
                         "estado_trabajo": nuevo_estatus_t, "estado_financiero": nuevo_estatus_f, 
@@ -472,8 +482,8 @@ with tab_trabajos:
 
     st.markdown("---")
     st.subheader("📋 Historial de Trabajos")
-    if not df_t.empty:
-        st.dataframe(df_t, use_container_width=True)
+    if not df_t_raw.empty:
+        st.dataframe(df_t_raw, use_container_width=True)
     else:
         st.info("No hay trabajos registrados todavía.")
 
@@ -483,7 +493,7 @@ with tab_trabajos:
 with tab_gastos:
     st.header("💸 Gastos y Trazabilidad por Trabajo")
     
-    df_g = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
+    df_g_raw = pd.DataFrame(supabase.table("gastos").select("*").execute().data)
 
     provs_df = get_catalogo("cat_proveedores")
     lista_proveedores = provs_df['nombre'].tolist() if not provs_df.empty else ["Sin Proveedores"]
@@ -532,8 +542,8 @@ with tab_gastos:
 
     st.markdown("---")
     st.subheader("📊 Historial de Gastos")
-    if not df_g.empty:
-        st.dataframe(df_g, use_container_width=True)
+    if not df_g_raw.empty:
+        st.dataframe(df_g_raw, use_container_width=True)
     else:
         st.info("No hay gastos registrados todavía.")
 
@@ -677,7 +687,7 @@ with tab_config:
                             supabase.table("cat_clientes").delete().eq("id", cid).execute()
                             st.rerun()
 
-    # 2. EQUIPOS (Económico opcional / flexible)
+    # 2. EQUIPOS
     with sub_cat_tab2:
         with st.form("add_equipo_form_master_nube", clear_on_submit=True):
             eq_eco = st.text_input("Número Económico / Identificador (Opcional)")
