@@ -403,12 +403,15 @@ with tab_trabajos:
                     "fecha_pago": f_pago_str, "portal": portal
                 }
                 
+                # MODIFICADO: Bloque try-except para imprimir el error exacto en pantalla si falla
                 try:
-                    supabase.table("trabajos").insert(data_trabajo).execute()
+                    res = supabase.table("trabajos").insert(data_trabajo).execute()
+                    # A veces Supabase devuelve un objeto sin error, pero con data vacía
                     st.success(f"¡Registro guardado con éxito! ID asignado: {id_gen}")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error al guardar: {e}")
+                    st.error(f"❌ Error real al intentar guardar en Supabase: {str(e)}")
+                    st.error(f"Datos intentados: {data_trabajo}")
 
     if not df_t_raw.empty:
         lista_ids = [str(x) for x in df_t_raw['id_personalizado'].tolist() if x is not None and str(x) != 'nan' and str(x) != '']
@@ -503,9 +506,12 @@ with tab_trabajos:
                         "fecha_oc": f_oc_fin, "fecha_factura": f_factura_fin, "fecha_pago": f_pago_fin
                     }
                     
-                    supabase.table("trabajos").update(update_data).eq("id_personalizado", id_a_editar).execute()
-                    st.success("¡Trabajo actualizado con éxito!")
-                    st.rerun()
+                    try:
+                        supabase.table("trabajos").update(update_data).eq("id_personalizado", id_a_editar).execute()
+                        st.success("¡Trabajo actualizado con éxito!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al actualizar: {str(e)}")
                     
                 if col_btn2.form_submit_button("🗑️ Eliminar Trabajo"):
                     supabase.table("trabajos").delete().eq("id_personalizado", id_a_editar).execute()
@@ -534,7 +540,6 @@ with tab_trabajos:
         if df_hist.empty:
             st.info("No hay trabajos en el mes seleccionado.")
         else:
-            # Revertido a DataFrame visible como pediste
             df_display = df_hist.drop(columns=['fecha_dt'])
             st.dataframe(df_display, use_container_width=True)
     else:
@@ -613,7 +618,6 @@ with tab_gastos:
         if df_g_hist.empty:
             st.info("No hay gastos en el mes seleccionado.")
         else:
-            # Revertido a DataFrame visible
             df_g_display = df_g_hist.drop(columns=['fecha_dt'])
             st.dataframe(df_g_display, use_container_width=True)
     else:
@@ -878,7 +882,7 @@ with tab_config:
                             st.rerun()
                         except Exception: st.error("Ya existe.")
         st.markdown("---")
-        with st.expander("📋 Ver y Editar Proveedores Registrados", expanded=False):
+        with st.expander("📋 Ver y Editar Proveedores Registradas", expanded=False):
             prov_df_tab = get_catalogo("cat_proveedores")
             if not prov_df_tab.empty:
                 for _, row_p in prov_df_tab.iterrows():
