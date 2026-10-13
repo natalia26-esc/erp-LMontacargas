@@ -239,6 +239,7 @@ with tab_dash:
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
+    # SOCIOS Y CUENTAS BANCARIAS
     fac_angel = 0.0
     fac_montalvo = 0.0
     if not df_t_f.empty:
@@ -247,44 +248,47 @@ with tab_dash:
             fac_angel = df_socios[df_socios['facturado_por'] == 'Angel Llanez']['total'].astype(float).sum()
             fac_montalvo = df_socios[df_socios['facturado_por'] == 'Adolfo Montalvo']['total'].astype(float).sum()
     
-    df_todos_pagados = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
-    ing_angel_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Llanez']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
-    ing_montalvo_cuenta = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cuenta Montalvo']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
-    ing_cansino = df_todos_pagados[df_todos_pagados['cuenta_deposito'] == 'Cansino']['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
+    # Dinero depositado mensual (Usando TOTAL para que empate con la factura cobrada)
+    df_pagados_mes_actual = df_t_f[df_t_f['estado_pago'] == 'Pagado'] if not df_t_f.empty else pd.DataFrame()
+    ing_angel_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Llanez']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
+    ing_montalvo_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Montalvo']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
+    ing_cansino = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cansino']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     
-    capital_inicial = get_capital_inicial()
-    subtotal_hist_pagados = df_todos_pagados['subtotal'].astype(float).sum() if not df_todos_pagados.empty else 0.0
+    # Capital Histórico de toda la app (Para la métrica de Capital Total)
+    df_todos_pagados_hist = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
+    subtotal_hist_pagados = df_todos_pagados_hist['subtotal'].astype(float).sum() if not df_todos_pagados_hist.empty else 0.0
     subtotal_hist_gastos = df_g['subtotal'].astype(float).sum() if not df_g.empty else 0.0
     utilidad_historica_global = subtotal_hist_pagados - subtotal_hist_gastos
+    
+    capital_inicial = get_capital_inicial()
     capital_total_actual = capital_inicial + utilidad_historica_global
     
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Cotizado (Total)", f"${cotizado_mes:,.2f}")
     c2.metric("Facturado", f"${facturado_mes:,.2f}", f"{num_facturas} Facturas")
     c3.metric("Pagado (Cobrado)", f"${cobrado_mes:,.2f}")
     c4.metric("Pendiente de Cobro", f"${pendiente_mes:,.2f}")
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
+    c6.metric("IVA del Mes (Cobrado)", f"${iva_total_mes:,.2f}", f"IVA Gastos: ${iva_gastos_mes:,.2f}")
     
-    c6, c7, c8, c9, c10 = st.columns(5)
-    c6.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
-    c7.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
-    c8.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
-    c9.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
-    c10.metric("Trabajos del Mes", f"{num_trabajos_mes}")
+    c7, c8, c9, c10, c11 = st.columns(5)
+    c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", f"Inicial: ${capital_inicial:,.2f}")
+    c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
+    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_mes:,.2f}")
+    c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    c11.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     
     st.markdown("---")
     
-    st.subheader("👥 Control y Rendimiento por Socio")
+    st.subheader(f"👥 Control y Rendimiento por Socio (Filtrado por: {mes_sel})")
     sc1, sc2, sc3 = st.columns(3)
     sc1.metric("Facturado por Ángel Llanez (AL)", f"${fac_angel:,.2f}")
     sc2.metric("Facturado por Adolfo Montalvo (AM)", f"${fac_montalvo:,.2f}")
     sc3.metric("Ingresos en Cuenta Cansino", f"${ing_cansino:,.2f}")
 
-    sc4, sc5, sc6 = st.columns(3)
+    sc4, sc5 = st.columns(2)
     sc4.metric("Ingresado (Cuenta Llanez)", f"${ing_angel_cuenta:,.2f}")
     sc5.metric("Ingresado (Cuenta Montalvo)", f"${ing_montalvo_cuenta:,.2f}")
-    # Nueva métrica de IVA
-    sc6.metric("IVA Total del Mes (Cobrado)", f"${iva_total_mes:,.2f}", f"IVA Gastos: ${iva_gastos_mes:,.2f}")
 
     st.markdown("---")
     col_g1, col_g2 = st.columns(2)
@@ -347,7 +351,6 @@ with tab_trabajos:
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
                 cotizacion = st.text_input("Cotización No. (Opcional)")
                 
-                # Fechas arregladas (Opcionales con value=None)
                 fecha_cot = st.date_input("Fecha Cotización (Opcional)", value=None, key="fcot_add")
                 oc = st.text_input("O.C. (Opcional)")
                 fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=None, key="foc_add")
