@@ -289,7 +289,7 @@ with tab_dash:
     c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", "sin IVA y sin gastos")
     c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
     c9.metric("Utilidad Neta (Pagados)", f"${utilidad_neta_pagados:,.2f}", "sin IVA")
-    c10.metric("Utilidad Neta (Pagados sin Gastos)", f"${utilidad_neta_sin_gastos:,.2f}", "sin IVA")
+    c10.metric("Utilidad Neta (con Gastos)", f"${utilidad_neta_con_gastos:,.2f}", "sin IVA")
     c11.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
     c12.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     
@@ -310,8 +310,8 @@ with tab_dash:
     with col_g1:
         st.subheader("📈 Ingresos Cobrados vs Gastos del Mes")
         df_bar = pd.DataFrame({
-            'Concepto': ['Utilidad Neta (Pagados)', 'Gastos del Mes', 'Utilidad Neta (sin Gastos)'],
-            'Monto': [utilidad_neta_pagados, gastos_totales_mes, utilidad_neta_sin_gastos]
+            'Concepto': ['Utilidad Neta (Pagados)', 'Gastos del Mes', 'Utilidad Neta (con Gastos)'],
+            'Monto': [utilidad_neta_pagados, gastos_totales_mes, utilidad_neta_con_gastos]
         })
         st.bar_chart(df_bar.set_index('Concepto'))
             
