@@ -46,10 +46,28 @@ def generar_id(tipo_prefijo, fecha_str):
         fecha_formateada = dt_obj.strftime("%d%m%Y")
         tabla = "trabajos" if tipo_prefijo == "tr" else ("gastos" if tipo_prefijo == "ga" else "rentas")
         
-        # Filtrar para contar solo los registros de ESA fecha exacta para la numeración
-        res = supabase.table(tabla).select("id_personalizado", count="exact").eq("fecha", fecha_str).execute()
-        count = res.count if res.count is not None else 0
-        return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
+        prefix = f"{tipo_prefijo}_{fecha_formateada}_"
+        
+        # Obtenemos todos los IDs para encontrar el mayor DE ESE DÍA ESPECÍFICO
+        res = supabase.table(tabla).select("id_personalizado").execute()
+        
+        if res.data:
+            ids_del_dia = [r['id_personalizado'] for r in res.data if r['id_personalizado'] and str(r['id_personalizado']).startswith(prefix)]
+            if not ids_del_dia:
+                return f"{prefix}001"
+                
+            max_num = 0
+            for id_val in ids_del_dia:
+                try:
+                    num = int(str(id_val).split("_")[-1])
+                    if num > max_num:
+                        max_num = num
+                except:
+                    pass
+            return f"{prefix}{max_num + 1:03d}"
+        else:
+            return f"{prefix}001"
+            
     except Exception as e:
         return f"{tipo_prefijo}_error_000"
 
@@ -349,7 +367,6 @@ with tab_trabajos:
                 fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=None, key="foc_add")
             with tc4:
                 factura = st.text_input("Factura (Opcional)")
-                # Se añade Fecha de Factura en Nuevo Registro
                 fecha_factura = st.date_input("Fecha Factura (Opcional)", value=None, key="ffactura_add")
                 facturado_por = st.selectbox("Facturado Por", ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"])
                 subtotal = st.number_input("Subtotal ($)", min_value=0.0, step=0.01)
@@ -430,22 +447,21 @@ with tab_trabajos:
                     nueva_factura = st.text_input("Factura No.", value=val_factura_txt)
 
                 with ec3:
-                    # Fechas en la edición
                     val_fcot_ant = str(registro_actual.get('fecha_cotizacion', '')) if pd.notna(registro_actual.get('fecha_cotizacion', '')) and str(registro_actual.get('fecha_cotizacion', '')).strip() != '' else None
                     dt_fcot = datetime.strptime(val_fcot_ant, "%Y-%m-%d").date() if val_fcot_ant else None
-                    nueva_fecha_cot = st.date_input("Fecha Cotización (Opcional)", value=dt_fcot, key="fcot_edit")
+                    nueva_fecha_cot = st.date_input("Fecha Cotización", value=dt_fcot, key="fcot_edit")
 
                     val_foc_ant = str(registro_actual.get('fecha_oc', '')) if pd.notna(registro_actual.get('fecha_oc', '')) and str(registro_actual.get('fecha_oc', '')).strip() != '' else None
                     dt_foc = datetime.strptime(val_foc_ant, "%Y-%m-%d").date() if val_foc_ant else None
-                    nueva_fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=dt_foc, key="foc_edit")
+                    nueva_fecha_oc = st.date_input("Fecha O.C.", value=dt_foc, key="foc_edit")
 
                     val_ffac_ant = str(registro_actual.get('fecha_factura', '')) if pd.notna(registro_actual.get('fecha_factura', '')) and str(registro_actual.get('fecha_factura', '')).strip() != '' else None
                     dt_ffac = datetime.strptime(val_ffac_ant, "%Y-%m-%d").date() if val_ffac_ant else None
-                    nueva_fecha_factura = st.date_input("Fecha Factura (Opcional)", value=dt_ffac, key="ffactura_edit")
+                    nueva_fecha_factura = st.date_input("Fecha Factura", value=dt_ffac, key="ffactura_edit")
 
                     val_fp_ant = str(registro_actual.get('fecha_pago', '')) if pd.notna(registro_actual.get('fecha_pago', '')) and str(registro_actual.get('fecha_pago', '')).strip() != '' else None
                     dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date() if val_fp_ant else None
-                    nueva_fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=dt_fp, key="fpago_edit")
+                    nueva_fecha_pago = st.date_input("Fecha de Pago", value=dt_fp, key="fpago_edit")
 
                 with ec4:
                     fac_opts = ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"]
@@ -515,9 +531,12 @@ with tab_trabajos:
             num_mes_filtro = int(mes_filtro.split(" - ")[0])
             df_hist = df_hist[df_hist['fecha_dt'].dt.month == num_mes_filtro]
             
-        # Limpieza para mostrar
-        df_hist = df_hist.drop(columns=['fecha_dt'])
-        st.dataframe(df_hist, use_container_width=True)
+        if df_hist.empty:
+            st.info("No hay trabajos en el mes seleccionado.")
+        else:
+            # Revertido a DataFrame visible como pediste
+            df_display = df_hist.drop(columns=['fecha_dt'])
+            st.dataframe(df_display, use_container_width=True)
     else:
         st.info("No hay trabajos registrados todavía.")
 
@@ -577,7 +596,26 @@ with tab_gastos:
     st.markdown("---")
     st.subheader("📊 Historial de Gastos")
     if not df_g_raw.empty:
-        st.dataframe(df_g_raw, use_container_width=True)
+        df_g_hist = df_g_raw.copy()
+        df_g_hist['fecha_dt'] = pd.to_datetime(df_g_hist['fecha'], errors='coerce')
+        
+        col_gf1, col_gf2 = st.columns(2)
+        anos_g_hist = sorted(list(set([str(int(y)) for y in df_g_hist['fecha_dt'].dt.year.dropna().unique()] + [str(datetime.now().year)])))
+        anio_g_filtro = col_gf1.selectbox("Filtrar por Año", anos_g_hist, index=len(anos_g_hist)-1, key="hist_g_anio")
+        
+        mes_g_filtro = col_gf2.selectbox("Filtrar por Mes", meses_nombres, index=0, key="hist_g_mes")
+        
+        df_g_hist = df_g_hist[df_g_hist['fecha_dt'].dt.year == int(anio_g_filtro)]
+        if mes_g_filtro != "Todos":
+            num_mes_g_filtro = int(mes_g_filtro.split(" - ")[0])
+            df_g_hist = df_g_hist[df_g_hist['fecha_dt'].dt.month == num_mes_g_filtro]
+            
+        if df_g_hist.empty:
+            st.info("No hay gastos en el mes seleccionado.")
+        else:
+            # Revertido a DataFrame visible
+            df_g_display = df_g_hist.drop(columns=['fecha_dt'])
+            st.dataframe(df_g_display, use_container_width=True)
     else:
         st.info("No hay gastos registrados todavía.")
 
@@ -707,20 +745,21 @@ with tab_config:
                         except Exception: st.error("El cliente ya existe o hubo un error.")
         
         st.markdown("---")
-        if not clients_df_tab.empty:
-            for _, row_c in clients_df_tab.iterrows():
-                cid, cname = row_c['id'], row_c['nombre']
-                with st.expander(f"Cliente: {cname}"):
-                    with st.form(f"form_edit_cli_{cid}"):
-                        edit_cname = st.text_input("Modificar Nombre", value=cname)
-                        col_eb1, col_eb2 = st.columns(2)
-                        if col_eb1.form_submit_button("💾 Guardar"):
-                            supabase.table("cat_clientes").update({"nombre": edit_cname.strip()}).eq("id", cid).execute()
-                            st.success("¡Actualizado!")
-                            st.rerun()
-                        if col_eb2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_clientes").delete().eq("id", cid).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Clientes Registrados", expanded=False):
+            if not clients_df_tab.empty:
+                for _, row_c in clients_df_tab.iterrows():
+                    cid, cname = row_c['id'], row_c['nombre']
+                    with st.expander(f"Cliente: {cname}"):
+                        with st.form(f"form_edit_cli_{cid}"):
+                            edit_cname = st.text_input("Modificar Nombre", value=cname)
+                            col_eb1, col_eb2 = st.columns(2)
+                            if col_eb1.form_submit_button("💾 Guardar"):
+                                supabase.table("cat_clientes").update({"nombre": edit_cname.strip()}).eq("id", cid).execute()
+                                st.success("¡Actualizado!")
+                                st.rerun()
+                            if col_eb2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_clientes").delete().eq("id", cid).execute()
+                                st.rerun()
 
     # 2. EQUIPOS
     with sub_cat_tab2:
@@ -742,33 +781,34 @@ with tab_config:
                     st.rerun()
         
         st.markdown("---")
-        eqs_df_tab = get_equipos_catalogo_df()
-        if not eqs_df_tab.empty:
-            for _, e in eqs_df_tab.iterrows():
-                eq_id = e['id']
-                eco_display = e['eco'] if pd.notna(e['eco']) and str(e['eco']).strip() != "" else "S/N"
-                with st.expander(f"Eco: {eco_display} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
-                    with st.form(f"form_edit_eq_{eq_id}"):
-                        ed_eco = st.text_input("Número Económico", value=str(e['eco']) if pd.notna(e['eco']) else "")
-                        ed_marca = st.text_input("Marca", value=str(e['marca']) if pd.notna(e['marca']) else "")
-                        ed_modelo = st.text_input("Modelo", value=str(e['modelo']) if pd.notna(e['modelo']) else "")
-                        ed_serie = st.text_input("Serie", value=str(e['serie']) if pd.notna(e['serie']) else "")
-                        
-                        idx_cli = clients_for_eq.index(e['cliente']) if e['cliente'] in clients_for_eq else 0
-                        ed_cli = st.selectbox("Cliente", clients_for_eq, index=idx_cli, key=f"sel_cli_eq_{eq_id}")
-                        
-                        col_eq1, col_eq2 = st.columns(2)
-                        if col_eq1.form_submit_button("💾 Guardar"):
-                            eco_edit_final = ed_eco.strip() if ed_eco.strip() else "S/N"
-                            supabase.table("cat_equipos").update({
-                                "eco": eco_edit_final, "marca": ed_marca.strip(), 
-                                "modelo": ed_modelo.strip(), "serie": ed_serie.strip(), "cliente": ed_cli
-                            }).eq("id", eq_id).execute()
-                            st.success("¡Equipo actualizado!")
-                            st.rerun()
-                        if col_eq2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_equipos").delete().eq("id", eq_id).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Equipos Registrados", expanded=False):
+            eqs_df_tab = get_equipos_catalogo_df()
+            if not eqs_df_tab.empty:
+                for _, e in eqs_df_tab.iterrows():
+                    eq_id = e['id']
+                    eco_display = e['eco'] if pd.notna(e['eco']) and str(e['eco']).strip() != "" else "S/N"
+                    with st.expander(f"Eco: {eco_display} | {e['marca']} {e['modelo']} — Cliente: {e['cliente']}"):
+                        with st.form(f"form_edit_eq_{eq_id}"):
+                            ed_eco = st.text_input("Número Económico", value=str(e['eco']) if pd.notna(e['eco']) else "")
+                            ed_marca = st.text_input("Marca", value=str(e['marca']) if pd.notna(e['marca']) else "")
+                            ed_modelo = st.text_input("Modelo", value=str(e['modelo']) if pd.notna(e['modelo']) else "")
+                            ed_serie = st.text_input("Serie", value=str(e['serie']) if pd.notna(e['serie']) else "")
+                            
+                            idx_cli = clients_for_eq.index(e['cliente']) if e['cliente'] in clients_for_eq else 0
+                            ed_cli = st.selectbox("Cliente", clients_for_eq, index=idx_cli, key=f"sel_cli_eq_{eq_id}")
+                            
+                            col_eq1, col_eq2 = st.columns(2)
+                            if col_eq1.form_submit_button("💾 Guardar"):
+                                eco_edit_final = ed_eco.strip() if ed_eco.strip() else "S/N"
+                                supabase.table("cat_equipos").update({
+                                    "eco": eco_edit_final, "marca": ed_marca.strip(), 
+                                    "modelo": ed_modelo.strip(), "serie": ed_serie.strip(), "cliente": ed_cli
+                                }).eq("id", eq_id).execute()
+                                st.success("¡Equipo actualizado!")
+                                st.rerun()
+                            if col_eq2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_equipos").delete().eq("id", eq_id).execute()
+                                st.rerun()
 
     # 3. CATEGORÍAS
     with sub_cat_tab3:
@@ -782,20 +822,21 @@ with tab_config:
                             st.rerun()
                         except Exception: st.error("Ya existe.")
         st.markdown("---")
-        cats_df_tab = get_catalogo("cat_categorias")
-        if not cats_df_tab.empty:
-            for _, row_cat in cats_df_tab.iterrows():
-                cid, cname = row_cat['id'], row_cat['nombre']
-                with st.expander(f"Categoría: {cname}"):
-                    with st.form(f"form_edit_cat_{cid}"):
-                        ed_cname = st.text_input("Modificar", value=cname)
-                        cb1, cb2 = st.columns(2)
-                        if cb1.form_submit_button("💾 Guardar"):
-                            supabase.table("cat_categorias").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
-                            st.rerun()
-                        if cb2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_categorias").delete().eq("id", cid).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Categorías Registradas", expanded=False):
+            cats_df_tab = get_catalogo("cat_categorias")
+            if not cats_df_tab.empty:
+                for _, row_cat in cats_df_tab.iterrows():
+                    cid, cname = row_cat['id'], row_cat['nombre']
+                    with st.expander(f"Categoría: {cname}"):
+                        with st.form(f"form_edit_cat_{cid}"):
+                            ed_cname = st.text_input("Modificar", value=cname)
+                            cb1, cb2 = st.columns(2)
+                            if cb1.form_submit_button("💾 Guardar"):
+                                supabase.table("cat_categorias").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
+                                st.rerun()
+                            if cb2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_categorias").delete().eq("id", cid).execute()
+                                st.rerun()
 
     # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
@@ -809,20 +850,21 @@ with tab_config:
                             st.rerun()
                         except Exception: st.error("Ya existe.")
         st.markdown("---")
-        sub_df_tab = get_catalogo("cat_subcategorias")
-        if not sub_df_tab.empty:
-            for _, row_sub in sub_df_tab.iterrows():
-                cid, cname = row_sub['id'], row_sub['nombre']
-                with st.expander(f"Subcategoría: {cname}"):
-                    with st.form(f"form_edit_subcat_{cid}"):
-                        ed_sname = st.text_input("Modificar", value=cname)
-                        sb1, sb2 = st.columns(2)
-                        if sb1.form_submit_button("💾 Guardar"):
-                            supabase.table("cat_subcategorias").update({"nombre": ed_sname.strip()}).eq("id", cid).execute()
-                            st.rerun()
-                        if sb2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_subcategorias").delete().eq("id", cid).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Subcategorías Registradas", expanded=False):
+            sub_df_tab = get_catalogo("cat_subcategorias")
+            if not sub_df_tab.empty:
+                for _, row_sub in sub_df_tab.iterrows():
+                    cid, cname = row_sub['id'], row_sub['nombre']
+                    with st.expander(f"Subcategoría: {cname}"):
+                        with st.form(f"form_edit_subcat_{cid}"):
+                            ed_sname = st.text_input("Modificar", value=cname)
+                            sb1, sb2 = st.columns(2)
+                            if sb1.form_submit_button("💾 Guardar"):
+                                supabase.table("cat_subcategorias").update({"nombre": ed_sname.strip()}).eq("id", cid).execute()
+                                st.rerun()
+                            if sb2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_subcategorias").delete().eq("id", cid).execute()
+                                st.rerun()
 
     # 5. PROVEEDORES
     with sub_cat_tab5:
@@ -836,20 +878,21 @@ with tab_config:
                             st.rerun()
                         except Exception: st.error("Ya existe.")
         st.markdown("---")
-        prov_df_tab = get_catalogo("cat_proveedores")
-        if not prov_df_tab.empty:
-            for _, row_p in prov_df_tab.iterrows():
-                cid, cname = row_p['id'], row_p['nombre']
-                with st.expander(f"Proveedor: {cname}"):
-                    with st.form(f"form_edit_prov_{cid}"):
-                        ed_pname = st.text_input("Modificar", value=cname)
-                        pb1, pb2 = st.columns(2)
-                        if pb1.form_submit_button("💾 Guardar"):
-                            supabase.table("cat_proveedores").update({"nombre": ed_pname.strip()}).eq("id", cid).execute()
-                            st.rerun()
-                        if pb2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_proveedores").delete().eq("id", cid).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Proveedores Registrados", expanded=False):
+            prov_df_tab = get_catalogo("cat_proveedores")
+            if not prov_df_tab.empty:
+                for _, row_p in prov_df_tab.iterrows():
+                    cid, cname = row_p['id'], row_p['nombre']
+                    with st.expander(f"Proveedor: {cname}"):
+                        with st.form(f"form_edit_prov_{cid}"):
+                            ed_pname = st.text_input("Modificar", value=cname)
+                            pb1, pb2 = st.columns(2)
+                            if pb1.form_submit_button("💾 Guardar"):
+                                supabase.table("cat_proveedores").update({"nombre": ed_pname.strip()}).eq("id", cid).execute()
+                                st.rerun()
+                            if pb2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_proveedores").delete().eq("id", cid).execute()
+                                st.rerun()
 
     # 6. CUENTAS
     with sub_cat_tab6:
@@ -863,17 +906,18 @@ with tab_config:
                             st.rerun()
                         except Exception: st.error("Ya existe.")
         st.markdown("---")
-        cta_df_tab = get_catalogo("cat_cuentas")
-        if not cta_df_tab.empty:
-            for _, row_cta in cta_df_tab.iterrows():
-                cid, cname = row_cta['id'], row_cta['nombre']
-                with st.expander(f"Cuenta: {cname}"):
-                    with st.form(f"form_edit_cta_{cid}"):
-                        ed_cname = st.text_input("Modificar", value=cname)
-                        cb1, cb2 = st.columns(2)
-                        if cb1.form_submit_button("💾 Guardar"):
-                            supabase.table("cat_cuentas").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
-                            st.rerun()
-                        if cb2.form_submit_button("🗑️ Borrar"):
-                            supabase.table("cat_cuentas").delete().eq("id", cid).execute()
-                            st.rerun()
+        with st.expander("📋 Ver y Editar Cuentas Registradas", expanded=False):
+            cta_df_tab = get_catalogo("cat_cuentas")
+            if not cta_df_tab.empty:
+                for _, row_cta in cta_df_tab.iterrows():
+                    cid, cname = row_cta['id'], row_cta['nombre']
+                    with st.expander(f"Cuenta: {cname}"):
+                        with st.form(f"form_edit_cta_{cid}"):
+                            ed_cname = st.text_input("Modificar", value=cname)
+                            cb1, cb2 = st.columns(2)
+                            if cb1.form_submit_button("💾 Guardar"):
+                                supabase.table("cat_cuentas").update({"nombre": ed_cname.strip()}).eq("id", cid).execute()
+                                st.rerun()
+                            if cb2.form_submit_button("🗑️ Borrar"):
+                                supabase.table("cat_cuentas").delete().eq("id", cid).execute()
+                                st.rerun()
