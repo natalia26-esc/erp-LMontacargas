@@ -45,7 +45,9 @@ def generar_id(tipo_prefijo, fecha_str):
         dt_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
         fecha_formateada = dt_obj.strftime("%d%m%Y")
         tabla = "trabajos" if tipo_prefijo == "tr" else ("gastos" if tipo_prefijo == "ga" else "rentas")
-        res = supabase.table(tabla).select("id_personalizado", count="exact").execute()
+        
+        # Filtrar para contar solo los registros de ESA fecha exacta para la numeración
+        res = supabase.table(tabla).select("id_personalizado", count="exact").eq("fecha", fecha_str).execute()
         count = res.count if res.count is not None else 0
         return f"{tipo_prefijo}_{fecha_formateada}_{count + 1:03d}"
     except Exception as e:
@@ -206,24 +208,19 @@ with tab_dash:
     iva_total_mes = 0.0
     
     if not df_t_f.empty:
-        # Cotizado
         df_cotizados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Por Cotizar', 'Cotizado']) | (df_t_f['estado_trabajo'] == 'N/A (Cotización)')]
         cotizado_mes = df_cotizados_mes['subtotal'].astype(float).sum() if not df_cotizados_mes.empty else 0.0
 
-        # Facturado
         df_facturados_mes = df_t_f[df_t_f['estado_financiero'].isin(['Facturado', 'Pagado']) | (df_t_f['factura'].notna() & (df_t_f['factura'] != ''))]
         facturado_mes = df_facturados_mes['total'].astype(float).sum() if not df_facturados_mes.empty else 0.0
         num_facturas = df_facturados_mes.shape[0]
         
-        # Pagado
         df_pagados_mes = df_t_f[df_t_f['estado_pago'] == 'Pagado']
         cobrado_mes = df_pagados_mes['total'].astype(float).sum() if not df_pagados_mes.empty else 0.0
         
-        # Pendiente de cobro
         df_pendientes_cobro = df_t_f[(df_t_f['estado_pago'] != 'Pagado') & (df_t_f['estado_financiero'].isin(['Aprobado', 'Facturado']))]
         pendiente_mes = df_pendientes_cobro['total'].astype(float).sum() if not df_pendientes_cobro.empty else 0.0
         
-        # Iterar sobre los pagados para Utilidad, Costo Fiscal y sumatoria de IVA
         for _, row in df_pagados_mes.iterrows():
             sub_val = float(row.get('subtotal', 0.0)) if pd.notna(row.get('subtotal')) else 0.0
             iva_val = float(row.get('iva', 0.0)) if pd.notna(row.get('iva')) else 0.0
@@ -239,7 +236,6 @@ with tab_dash:
     utilidad_mes = subtotal_ingresos_reales - subtotal_gastos_mes
     comp_3_mes = utilidad_mes * 0.03 if utilidad_mes > 0 else 0.0
     
-    # SOCIOS Y CUENTAS BANCARIAS
     fac_angel = 0.0
     fac_montalvo = 0.0
     if not df_t_f.empty:
@@ -248,13 +244,11 @@ with tab_dash:
             fac_angel = df_socios[df_socios['facturado_por'] == 'Angel Llanez']['total'].astype(float).sum()
             fac_montalvo = df_socios[df_socios['facturado_por'] == 'Adolfo Montalvo']['total'].astype(float).sum()
     
-    # Dinero depositado mensual (Usando TOTAL para que empate con la factura cobrada)
     df_pagados_mes_actual = df_t_f[df_t_f['estado_pago'] == 'Pagado'] if not df_t_f.empty else pd.DataFrame()
     ing_angel_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Llanez']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     ing_montalvo_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Montalvo']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     ing_cansino = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cansino']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     
-    # Capital Histórico de toda la app (Para la métrica de Capital Total)
     df_todos_pagados_hist = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     subtotal_hist_pagados = df_todos_pagados_hist['subtotal'].astype(float).sum() if not df_todos_pagados_hist.empty else 0.0
     subtotal_hist_gastos = df_g['subtotal'].astype(float).sum() if not df_g.empty else 0.0
@@ -350,20 +344,19 @@ with tab_trabajos:
                 estado_trabajo = st.selectbox("Estado de Trabajo", ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"])
                 estado_financiero = st.selectbox("Estado Financiero", ["Por Cotizar", "Cotizado", "Aprobado", "Facturado", "Pagado"])
                 cotizacion = st.text_input("Cotización No. (Opcional)")
-                
                 fecha_cot = st.date_input("Fecha Cotización (Opcional)", value=None, key="fcot_add")
                 oc = st.text_input("O.C. (Opcional)")
                 fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=None, key="foc_add")
-                
             with tc4:
                 factura = st.text_input("Factura (Opcional)")
+                # Se añade Fecha de Factura en Nuevo Registro
+                fecha_factura = st.date_input("Fecha Factura (Opcional)", value=None, key="ffactura_add")
                 facturado_por = st.selectbox("Facturado Por", ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"])
                 subtotal = st.number_input("Subtotal ($)", min_value=0.0, step=0.01)
                 iva = subtotal * 0.16
                 total = subtotal + iva
                 cuenta_dep = st.selectbox("Cuenta donde se depositó", lista_cuentas)
                 estado_pago = st.selectbox("Estado de Pago", ["Pendiente", "Pagado", "Parcial"])
-                
                 fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=None, key="fpago_add")
                 portal = st.selectbox("Portal", ["Pendiente de Subir", "Sí", "No"])
 
@@ -374,6 +367,7 @@ with tab_trabajos:
                 
                 f_cot_str = str(fecha_cot) if fecha_cot is not None else ""
                 f_oc_str = str(fecha_oc) if fecha_oc is not None else ""
+                f_factura_str = str(fecha_factura) if fecha_factura is not None else ""
                 f_pago_str = str(fecha_pago) if fecha_pago is not None else ""
                 
                 fac_por_final = "" if facturado_por == "-- Pendiente / Sin facturar --" else facturado_por
@@ -386,9 +380,9 @@ with tab_trabajos:
                     "recibo_correctivo": recibo_corr, "recibo_preventivo": recibo_prev,
                     "estado_trabajo": estado_trabajo, "estado_financiero": estado_financiero,
                     "cotizacion": cotizacion, "fecha_cotizacion": f_cot_str, "oc": oc,
-                    "fecha_oc": f_oc_str, "factura": factura, "facturado_por": fac_por_final,
-                    "subtotal": float(subtotal), "iva": float(iva), "total": float(total),
-                    "cuenta_deposito": cta_final, "estado_pago": estado_pago,
+                    "fecha_oc": f_oc_str, "factura": factura, "fecha_factura": f_factura_str, 
+                    "facturado_por": fac_por_final, "subtotal": float(subtotal), "iva": float(iva), 
+                    "total": float(total), "cuenta_deposito": cta_final, "estado_pago": estado_pago,
                     "fecha_pago": f_pago_str, "portal": portal
                 }
                 
@@ -408,7 +402,7 @@ with tab_trabajos:
             with st.form("form_editar_trabajo"):
                 st.write(f"Editando Registro: **{id_a_editar}**")
                 
-                ec1, ec2, ec3 = st.columns(3)
+                ec1, ec2, ec3, ec4 = st.columns(4)
                 with ec1:
                     est_t_opts = ["Pendiente", "En Proceso", "Terminado", "Entregado", "N/A (Cotización)"]
                     val_t = str(registro_actual['estado_trabajo'])
@@ -426,18 +420,39 @@ with tab_trabajos:
                     nuevo_estatus_p = st.selectbox("Estado de Pago", est_p_opts, index=idx_p)
                 
                 with ec2:
+                    val_cot_txt = str(registro_actual['cotizacion']) if pd.notna(registro_actual['cotizacion']) else ""
+                    nueva_cotizacion = st.text_input("Cotización No.", value=val_cot_txt)
+                    
+                    val_oc_txt = str(registro_actual['oc']) if pd.notna(registro_actual['oc']) else ""
+                    nueva_oc = st.text_input("O.C.", value=val_oc_txt)
+                    
+                    val_factura_txt = str(registro_actual['factura']) if pd.notna(registro_actual['factura']) else ""
+                    nueva_factura = st.text_input("Factura No.", value=val_factura_txt)
+
+                with ec3:
+                    # Fechas en la edición
+                    val_fcot_ant = str(registro_actual.get('fecha_cotizacion', '')) if pd.notna(registro_actual.get('fecha_cotizacion', '')) and str(registro_actual.get('fecha_cotizacion', '')).strip() != '' else None
+                    dt_fcot = datetime.strptime(val_fcot_ant, "%Y-%m-%d").date() if val_fcot_ant else None
+                    nueva_fecha_cot = st.date_input("Fecha Cotización (Opcional)", value=dt_fcot, key="fcot_edit")
+
+                    val_foc_ant = str(registro_actual.get('fecha_oc', '')) if pd.notna(registro_actual.get('fecha_oc', '')) and str(registro_actual.get('fecha_oc', '')).strip() != '' else None
+                    dt_foc = datetime.strptime(val_foc_ant, "%Y-%m-%d").date() if val_foc_ant else None
+                    nueva_fecha_oc = st.date_input("Fecha O.C. (Opcional)", value=dt_foc, key="foc_edit")
+
+                    val_ffac_ant = str(registro_actual.get('fecha_factura', '')) if pd.notna(registro_actual.get('fecha_factura', '')) and str(registro_actual.get('fecha_factura', '')).strip() != '' else None
+                    dt_ffac = datetime.strptime(val_ffac_ant, "%Y-%m-%d").date() if val_ffac_ant else None
+                    nueva_fecha_factura = st.date_input("Fecha Factura (Opcional)", value=dt_ffac, key="ffactura_edit")
+
+                    val_fp_ant = str(registro_actual.get('fecha_pago', '')) if pd.notna(registro_actual.get('fecha_pago', '')) and str(registro_actual.get('fecha_pago', '')).strip() != '' else None
+                    dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date() if val_fp_ant else None
+                    nueva_fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=dt_fp, key="fpago_edit")
+
+                with ec4:
                     fac_opts = ["-- Pendiente / Sin facturar --", "Angel Llanez", "Adolfo Montalvo", "Externo"]
                     val_fac = str(registro_actual['facturado_por']) if pd.notna(registro_actual['facturado_por']) and registro_actual['facturado_por'] != '' else "-- Pendiente / Sin facturar --"
                     idx_fac = fac_opts.index(val_fac) if val_fac in fac_opts else 0
                     nuevo_fac_por = st.selectbox("Facturado Por", fac_opts, index=idx_fac)
 
-                    val_factura_txt = str(registro_actual['factura']) if pd.notna(registro_actual['factura']) else ""
-                    nueva_factura = st.text_input("Factura No.", value=val_factura_txt)
-
-                    val_oc_txt = str(registro_actual['oc']) if pd.notna(registro_actual['oc']) else ""
-                    nueva_oc = st.text_input("O.C.", value=val_oc_txt)
-                
-                with ec3:
                     val_cta = str(registro_actual['cuenta_deposito']) if pd.notna(registro_actual['cuenta_deposito']) and str(registro_actual['cuenta_deposito']).strip() != '' else "-- Sin asignar --"
                     idx_cta = lista_cuentas.index(val_cta) if val_cta in lista_cuentas else 0
                     nueva_cuenta = st.selectbox("Cuenta donde se depositó", lista_cuentas, index=idx_cta)
@@ -449,14 +464,6 @@ with tab_trabajos:
 
                     sub_val_ant = float(registro_actual['subtotal']) if pd.notna(registro_actual['subtotal']) else 0.0
                     nuevo_subtotal = st.number_input("Subtotal ($)", value=sub_val_ant, step=0.01)
-
-                    val_fp_ant = str(registro_actual['fecha_pago']) if pd.notna(registro_actual['fecha_pago']) and str(registro_actual['fecha_pago']).strip() != '' else None
-                    try:
-                        dt_fp = datetime.strptime(val_fp_ant, "%Y-%m-%d").date() if val_fp_ant else None
-                    except:
-                        dt_fp = None
-                    
-                    nueva_fecha_pago = st.date_input("Fecha de Pago (Opcional)", value=dt_fp, key="fpago_edit")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 if col_btn1.form_submit_button("💾 Guardar Cambios"):
@@ -464,14 +471,20 @@ with tab_trabajos:
                     nuevo_total = float(nuevo_subtotal) + nuevo_iva
                     fac_por_fin = "" if nuevo_fac_por == "-- Pendiente / Sin facturar --" else nuevo_fac_por
                     cta_fin = "" if nueva_cuenta == "-- Sin asignar --" else nueva_cuenta
+                    
+                    f_cot_fin = str(nueva_fecha_cot) if nueva_fecha_cot is not None else ""
+                    f_oc_fin = str(nueva_fecha_oc) if nueva_fecha_oc is not None else ""
+                    f_factura_fin = str(nueva_fecha_factura) if nueva_fecha_factura is not None else ""
                     f_pago_fin = str(nueva_fecha_pago) if nueva_fecha_pago is not None else ""
                     
                     update_data = {
                         "estado_trabajo": nuevo_estatus_t, "estado_financiero": nuevo_estatus_f, 
-                        "estado_pago": nuevo_estatus_p, "facturado_por": fac_por_fin, 
-                        "factura": nueva_factura, "oc": nueva_oc, "cuenta_deposito": cta_fin, 
-                        "portal": nuevo_portal, "subtotal": float(nuevo_subtotal), 
-                        "iva": float(nuevo_iva), "total": float(nuevo_total), "fecha_pago": f_pago_fin
+                        "estado_pago": nuevo_estatus_p, "cotizacion": nueva_cotizacion, 
+                        "oc": nueva_oc, "factura": nueva_factura, "facturado_por": fac_por_fin, 
+                        "cuenta_deposito": cta_fin, "portal": nuevo_portal, 
+                        "subtotal": float(nuevo_subtotal), "iva": float(nuevo_iva), 
+                        "total": float(nuevo_total), "fecha_cotizacion": f_cot_fin, 
+                        "fecha_oc": f_oc_fin, "fecha_factura": f_factura_fin, "fecha_pago": f_pago_fin
                     }
                     
                     supabase.table("trabajos").update(update_data).eq("id_personalizado", id_a_editar).execute()
@@ -486,7 +499,25 @@ with tab_trabajos:
     st.markdown("---")
     st.subheader("📋 Historial de Trabajos")
     if not df_t_raw.empty:
-        st.dataframe(df_t_raw, use_container_width=True)
+        df_hist = df_t_raw.copy()
+        df_hist['fecha_dt'] = pd.to_datetime(df_hist['fecha'], errors='coerce')
+        
+        col_f1, col_f2 = st.columns(2)
+        anos_hist = sorted(list(set([str(int(y)) for y in df_hist['fecha_dt'].dt.year.dropna().unique()] + [str(datetime.now().year)])))
+        anio_filtro = col_f1.selectbox("Filtrar por Año", anos_hist, index=len(anos_hist)-1, key="hist_anio")
+        
+        meses_hist = ["Todos", "01 - Enero", "02 - Febrero", "03 - Marzo", "04 - Abril", "05 - Mayo", "06 - Junio", 
+                      "07 - Julio", "08 - Agosto", "09 - Septiembre", "10 - Octubre", "11 - Noviembre", "12 - Diciembre"]
+        mes_filtro = col_f2.selectbox("Filtrar por Mes", meses_hist, index=0, key="hist_mes")
+        
+        df_hist = df_hist[df_hist['fecha_dt'].dt.year == int(anio_filtro)]
+        if mes_filtro != "Todos":
+            num_mes_filtro = int(mes_filtro.split(" - ")[0])
+            df_hist = df_hist[df_hist['fecha_dt'].dt.month == num_mes_filtro]
+            
+        # Limpieza para mostrar
+        df_hist = df_hist.drop(columns=['fecha_dt'])
+        st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("No hay trabajos registrados todavía.")
 
@@ -664,15 +695,16 @@ with tab_config:
 
     # 1. CLIENTES
     with sub_cat_tab1:
-        with st.form("add_cli", clear_on_submit=True):
-            nuevo_cli = st.text_input("Nombre del Nuevo Cliente")
-            if st.form_submit_button("Agregar Cliente"):
-                if nuevo_cli.strip():
-                    try:
-                        supabase.table("cat_clientes").insert({"nombre": nuevo_cli.strip()}).execute()
-                        st.success("¡Cliente agregado!")
-                        st.rerun()
-                    except Exception: st.error("El cliente ya existe o hubo un error.")
+        with st.expander("➕ Agregar Nuevo Cliente", expanded=False):
+            with st.form("add_cli", clear_on_submit=True):
+                nuevo_cli = st.text_input("Nombre del Nuevo Cliente")
+                if st.form_submit_button("Agregar Cliente"):
+                    if nuevo_cli.strip():
+                        try:
+                            supabase.table("cat_clientes").insert({"nombre": nuevo_cli.strip()}).execute()
+                            st.success("¡Cliente agregado!")
+                            st.rerun()
+                        except Exception: st.error("El cliente ya existe o hubo un error.")
         
         st.markdown("---")
         if not clients_df_tab.empty:
@@ -692,21 +724,22 @@ with tab_config:
 
     # 2. EQUIPOS
     with sub_cat_tab2:
-        with st.form("add_equipo_form_master_nube", clear_on_submit=True):
-            eq_eco = st.text_input("Número Económico / Identificador (Opcional)")
-            eq_marca = st.text_input("Marca (Ej. Mitsubishi, Toyota)")
-            eq_modelo = st.text_input("Modelo")
-            eq_serie = st.text_input("Serie")
-            eq_cliente = st.selectbox("Cliente Asociado / Propio", clients_for_eq)
-            
-            if st.form_submit_button("Registrar Nuevo Equipo"):
-                eco_final = eq_eco.strip() if eq_eco.strip() else "S/N"
-                supabase.table("cat_equipos").insert({
-                    "eco": eco_final, "marca": eq_marca.strip(), 
-                    "modelo": eq_modelo.strip(), "serie": eq_serie.strip(), "cliente": eq_cliente
-                }).execute()
-                st.success("¡Equipo registrado en la Nube correctamente!")
-                st.rerun()
+        with st.expander("➕ Registrar Nuevo Equipo", expanded=False):
+            with st.form("add_equipo_form_master_nube", clear_on_submit=True):
+                eq_eco = st.text_input("Número Económico / Identificador (Opcional)")
+                eq_marca = st.text_input("Marca (Ej. Mitsubishi, Toyota)")
+                eq_modelo = st.text_input("Modelo")
+                eq_serie = st.text_input("Serie")
+                eq_cliente = st.selectbox("Cliente Asociado / Propio", clients_for_eq)
+                
+                if st.form_submit_button("Registrar Nuevo Equipo"):
+                    eco_final = eq_eco.strip() if eq_eco.strip() else "S/N"
+                    supabase.table("cat_equipos").insert({
+                        "eco": eco_final, "marca": eq_marca.strip(), 
+                        "modelo": eq_modelo.strip(), "serie": eq_serie.strip(), "cliente": eq_cliente
+                    }).execute()
+                    st.success("¡Equipo registrado en la Nube correctamente!")
+                    st.rerun()
         
         st.markdown("---")
         eqs_df_tab = get_equipos_catalogo_df()
@@ -739,14 +772,15 @@ with tab_config:
 
     # 3. CATEGORÍAS
     with sub_cat_tab3:
-        with st.form("add_cat", clear_on_submit=True):
-            n_cat = st.text_input("Nueva Categoría")
-            if st.form_submit_button("Agregar Categoría"):
-                if n_cat.strip():
-                    try:
-                        supabase.table("cat_categorias").insert({"nombre": n_cat.strip()}).execute()
-                        st.rerun()
-                    except Exception: st.error("Ya existe.")
+        with st.expander("➕ Agregar Nueva Categoría", expanded=False):
+            with st.form("add_cat", clear_on_submit=True):
+                n_cat = st.text_input("Nueva Categoría")
+                if st.form_submit_button("Agregar Categoría"):
+                    if n_cat.strip():
+                        try:
+                            supabase.table("cat_categorias").insert({"nombre": n_cat.strip()}).execute()
+                            st.rerun()
+                        except Exception: st.error("Ya existe.")
         st.markdown("---")
         cats_df_tab = get_catalogo("cat_categorias")
         if not cats_df_tab.empty:
@@ -765,14 +799,15 @@ with tab_config:
 
     # 4. SUBCATEGORÍAS
     with sub_cat_tab4:
-        with st.form("add_subcat", clear_on_submit=True):
-            n_sub = st.text_input("Nueva Subcategoría")
-            if st.form_submit_button("Agregar Subcategoría"):
-                if n_sub.strip():
-                    try:
-                        supabase.table("cat_subcategorias").insert({"nombre": n_sub.strip()}).execute()
-                        st.rerun()
-                    except Exception: st.error("Ya existe.")
+        with st.expander("➕ Agregar Nueva Subcategoría", expanded=False):
+            with st.form("add_subcat", clear_on_submit=True):
+                n_sub = st.text_input("Nueva Subcategoría")
+                if st.form_submit_button("Agregar Subcategoría"):
+                    if n_sub.strip():
+                        try:
+                            supabase.table("cat_subcategorias").insert({"nombre": n_sub.strip()}).execute()
+                            st.rerun()
+                        except Exception: st.error("Ya existe.")
         st.markdown("---")
         sub_df_tab = get_catalogo("cat_subcategorias")
         if not sub_df_tab.empty:
@@ -791,14 +826,15 @@ with tab_config:
 
     # 5. PROVEEDORES
     with sub_cat_tab5:
-        with st.form("add_prov", clear_on_submit=True):
-            n_prov = st.text_input("Nombre del Proveedor")
-            if st.form_submit_button("Agregar Proveedor"):
-                if n_prov.strip():
-                    try:
-                        supabase.table("cat_proveedores").insert({"nombre": n_prov.strip()}).execute()
-                        st.rerun()
-                    except Exception: st.error("Ya existe.")
+        with st.expander("➕ Agregar Nuevo Proveedor", expanded=False):
+            with st.form("add_prov", clear_on_submit=True):
+                n_prov = st.text_input("Nombre del Proveedor")
+                if st.form_submit_button("Agregar Proveedor"):
+                    if n_prov.strip():
+                        try:
+                            supabase.table("cat_proveedores").insert({"nombre": n_prov.strip()}).execute()
+                            st.rerun()
+                        except Exception: st.error("Ya existe.")
         st.markdown("---")
         prov_df_tab = get_catalogo("cat_proveedores")
         if not prov_df_tab.empty:
@@ -817,14 +853,15 @@ with tab_config:
 
     # 6. CUENTAS
     with sub_cat_tab6:
-        with st.form("add_cta", clear_on_submit=True):
-            n_cta = st.text_input("Nombre de la Cuenta o Método")
-            if st.form_submit_button("Agregar Cuenta"):
-                if n_cta.strip():
-                    try:
-                        supabase.table("cat_cuentas").insert({"nombre": n_cta.strip()}).execute()
-                        st.rerun()
-                    except Exception: st.error("Ya existe.")
+        with st.expander("➕ Agregar Nueva Cuenta", expanded=False):
+            with st.form("add_cta", clear_on_submit=True):
+                n_cta = st.text_input("Nombre de la Cuenta o Método")
+                if st.form_submit_button("Agregar Cuenta"):
+                    if n_cta.strip():
+                        try:
+                            supabase.table("cat_cuentas").insert({"nombre": n_cta.strip()}).execute()
+                            st.rerun()
+                        except Exception: st.error("Ya existe.")
         st.markdown("---")
         cta_df_tab = get_catalogo("cat_cuentas")
         if not cta_df_tab.empty:
