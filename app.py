@@ -253,8 +253,8 @@ with tab_dash:
     
     # Nuevas variables de Utilidad ajustadas a tus instrucciones:
     utilidad_neta_pagados = subtotal_ingresos_reales
-    utilidad_neta_sin_gastos = subtotal_ingresos_reales - gastos_totales_mes
-    comp_3_mes = utilidad_neta_sin_gastos * 0.03 if utilidad_neta_sin_gastos > 0 else 0.0
+    utilidad_neta_con_gastos = subtotal_ingresos_reales - gastos_totales_mes
+    comp_3_mes = utilidad_neta_con_gastos * 0.03 if utilidad_neta_con_gastos > 0 else 0.0
     
     fac_angel = 0.0
     fac_montalvo = 0.0
