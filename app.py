@@ -81,6 +81,15 @@ def set_capital_inicial(monto):
     supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
 def clean_df_for_supabase(df):
+    """Limpia el DataFrame convirtiendo fechas a texto y nulos a None nativo para Supabase"""
+    # 1. Convertir todo a 'object' para evitar que Pandas force tipos extraños (como Timestamp o NaT)
+    df = df.astype(object)
+    
+    # 2. Convertir cualquier objeto de fecha a string (texto simple)
+    for col in df.columns:
+        df[col] = df[col].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else x)
+    
+    # 3. Reemplazar valores nulos por un None real de Python
     return df.where(pd.notnull(df), None)
 
 # ==========================================
@@ -248,10 +257,8 @@ with tab_dash:
                 costo_fiscal_mes += sub_val * 0.08
                 
     iva_gastos_mes = df_g_f['iva'].astype(float).sum() if not df_g_f.empty else 0.0
-    # Aquí obtenemos el TOTAL real del gasto
     gastos_totales_mes = df_g_f['total'].astype(float).sum() if not df_g_f.empty else 0.0
     
-    # Nuevas variables de Utilidad ajustadas a tus instrucciones:
     utilidad_neta_pagados = subtotal_ingresos_reales
     utilidad_neta_con_gastos = subtotal_ingresos_reales - gastos_totales_mes
     comp_3_mes = utilidad_neta_con_gastos * 0.03 if utilidad_neta_con_gastos > 0 else 0.0
@@ -269,7 +276,6 @@ with tab_dash:
     ing_montalvo_cuenta = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cuenta Montalvo']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     ing_cansino = df_pagados_mes_actual[df_pagados_mes_actual['cuenta_deposito'] == 'Cansino']['total'].astype(float).sum() if not df_pagados_mes_actual.empty else 0.0
     
-    # CÁLCULO DE CAPITAL TOTAL (Subtotal Histórico Cobrado - Total Histórico Gastado)
     df_todos_pagados_hist = df_t[df_t['estado_pago'] == 'Pagado'] if not df_t.empty else pd.DataFrame()
     subtotal_hist_pagados = df_todos_pagados_hist['subtotal'].astype(float).sum() if not df_todos_pagados_hist.empty else 0.0
     total_hist_gastos = df_g['total'].astype(float).sum() if not df_g.empty else 0.0
