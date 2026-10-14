@@ -48,7 +48,6 @@ def generar_id(tipo_prefijo, fecha_str):
         
         prefix = f"{tipo_prefijo}_{fecha_formateada}_"
         
-        # Obtenemos todos los IDs para encontrar el mayor DE ESE DÍA ESPECÍFICO
         res = supabase.table(tabla).select("id_personalizado").execute()
         
         if res.data:
@@ -173,7 +172,6 @@ with st.sidebar:
                     if sheet in xls.sheet_names:
                         df_sheet = pd.read_excel(xls, sheet_name=sheet)
                         
-                        # BLINDAJE ANTI-DUPLICADOS: Elimina filas fantasma y registros repetidos
                         if 'id_personalizado' in df_sheet.columns:
                             df_sheet = df_sheet.dropna(subset=['id_personalizado'])
                             df_sheet = df_sheet.drop_duplicates(subset=['id_personalizado'], keep='last')
@@ -184,7 +182,6 @@ with st.sidebar:
                             df_sheet = df_sheet.dropna(how='all')
                             df_sheet = df_sheet.drop_duplicates()
                         
-                        # Limpieza total y forzada a diccionario
                         records = clean_records_for_supabase(df_sheet)
                         
                         if records:
@@ -283,9 +280,9 @@ with tab_dash:
     iva_gastos_mes = df_g_f['iva'].astype(float).sum() if not df_g_f.empty else 0.0
     gastos_totales_mes = df_g_f['total'].astype(float).sum() if not df_g_f.empty else 0.0
     
-    utilidad_neta_pagados = subtotal_ingresos_reales
-    utilidad_neta_con_gastos = subtotal_ingresos_reales - gastos_totales_mes
-    comp_3_mes = utilidad_neta_con_gastos * 0.03 if utilidad_neta_con_gastos > 0 else 0.0
+    # NUEVO CÁLCULO UNIFICADO DE UTILIDAD NETA REAL
+    utilidad_neta_real = subtotal_ingresos_reales - costo_fiscal_mes - gastos_totales_mes
+    comp_3_mes = utilidad_neta_real * 0.03 if utilidad_neta_real > 0 else 0.0
     
     fac_angel = 0.0
     fac_montalvo = 0.0
@@ -315,13 +312,12 @@ with tab_dash:
     c5.metric("Costo Fiscal", f"${costo_fiscal_mes:,.2f}")
     c6.metric("IVA del Mes (Cobrado)", f"${iva_total_mes:,.2f}", f"IVA Gastos: ${iva_gastos_mes:,.2f}")
     
-    c7, c8, c9, c10, c11, c12 = st.columns(6)
+    c7, c8, c9, c10, c11 = st.columns(5)
     c7.metric("Capital Total Actual", f"${capital_total_actual:,.2f}", "sin IVA y sin gastos")
     c8.metric("Gastos del Mes", f"${gastos_totales_mes:,.2f}")
-    c9.metric("Utilidad Neta (Pagados)", f"${utilidad_neta_pagados:,.2f}", "sin IVA")
-    c10.metric("Utilidad Neta (con Gastos)", f"${utilidad_neta_con_gastos:,.2f}", "sin IVA")
-    c11.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
-    c12.metric("Trabajos del Mes", f"{num_trabajos_mes}")
+    c9.metric("Utilidad Neta Real", f"${utilidad_neta_real:,.2f}", "Subtotal - Costo - Gastos")
+    c10.metric("Compensación 3%", f"${comp_3_mes:,.2f}")
+    c11.metric("Trabajos del Mes", f"{num_trabajos_mes}")
     
     st.markdown("---")
     
@@ -338,10 +334,10 @@ with tab_dash:
     st.markdown("---")
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.subheader("📈 Ingresos Cobrados vs Gastos del Mes")
+        st.subheader("📈 Ingresos vs Egresos vs Utilidad Real")
         df_bar = pd.DataFrame({
-            'Concepto': ['Utilidad Neta (Pagados)', 'Gastos del Mes', 'Utilidad Neta (con Gastos)'],
-            'Monto': [utilidad_neta_pagados, gastos_totales_mes, utilidad_neta_con_gastos]
+            'Concepto': ['Ingresos (Subtotal)', 'Gastos + Costo Fiscal', 'Utilidad Neta Real'],
+            'Monto': [subtotal_ingresos_reales, gastos_totales_mes + costo_fiscal_mes, utilidad_neta_real]
         })
         st.bar_chart(df_bar.set_index('Concepto'))
             
@@ -602,7 +598,6 @@ with tab_gastos:
     equipos_db = get_equipos_catalogo_tuples()
     lista_equipos_strs = ["Sin equipo"] + ([f"Eco: {e[1]} | {e[2]} {e[3]} (Cliente: {e[5]})" for e in equipos_db] if equipos_db else [])
     
-    # Lista de trabajos para trazabilidad
     t_list = pd.DataFrame(supabase.table("trabajos").select("id_personalizado, cliente, equipo").execute().data)
     trabajos_opciones = ["Ninguno"] + [f"{r['id_personalizado']} - {r['cliente']} ({r['equipo']})" for _, r in t_list.iterrows()] if not t_list.empty else ["Ninguno"]
 
