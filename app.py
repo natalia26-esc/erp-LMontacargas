@@ -81,16 +81,22 @@ def set_capital_inicial(monto):
     supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
 def clean_df_for_supabase(df):
-    """Limpia el DataFrame convirtiendo fechas a texto y nulos a None nativo para Supabase"""
-    # 1. Convertir todo a 'object' para evitar que Pandas force tipos extraños (como Timestamp o NaT)
+    """Limpia el DataFrame convirtiendo fechas a texto y todo tipo de nulo/NaN a None nativo para Supabase"""
+    # 1. Convertir todo a 'object' para evitar que Pandas force tipos extraños
     df = df.astype(object)
     
     # 2. Convertir cualquier objeto de fecha a string (texto simple)
     for col in df.columns:
         df[col] = df[col].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else x)
     
-    # 3. Reemplazar valores nulos por un None real de Python
-    return df.where(pd.notnull(df), None)
+    # 3. Primer filtro: reemplazar nulos de Pandas por None
+    df = df.where(pd.notnull(df), None)
+    
+    # 4. Blindaje final: erradicar cualquier "NaN" matemático escondido que arruina el JSON
+    for col in df.columns:
+        df[col] = df[col].apply(lambda x: None if isinstance(x, float) and math.isnan(x) else x)
+        
+    return df
 
 # ==========================================
 # ENCABEZADO
