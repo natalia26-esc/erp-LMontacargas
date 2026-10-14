@@ -80,23 +80,30 @@ def get_capital_inicial():
 def set_capital_inicial(monto):
     supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
-def clean_df_for_supabase(df):
-    """Limpia el DataFrame convirtiendo fechas a texto y todo tipo de nulo/NaN a None nativo para Supabase"""
-    # 1. Convertir todo a 'object' para evitar que Pandas force tipos extraños
-    df = df.astype(object)
+def clean_records_for_supabase(df):
+    """Fuerza bruta para limpiar el DataFrame de cualquier NaN o error de JSON"""
+    # Convertir el dataframe a diccionarios crudos primero
+    raw_records = df.to_dict(orient='records')
     
-    # 2. Convertir cualquier objeto de fecha a string (texto simple)
-    for col in df.columns:
-        df[col] = df[col].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else x)
-    
-    # 3. Primer filtro: reemplazar nulos de Pandas por None
-    df = df.where(pd.notnull(df), None)
-    
-    # 4. Blindaje final: erradicar cualquier "NaN" matemático escondido que arruina el JSON
-    for col in df.columns:
-        df[col] = df[col].apply(lambda x: None if isinstance(x, float) and math.isnan(x) else x)
+    clean_records = []
+    for row in raw_records:
+        clean_row = {}
+        for key, val in row.items():
+            # 1. Atrapa valores nulos nativos de Pandas (NaT, nulos, etc)
+            if pd.isna(val):
+                clean_row[key] = None
+            # 2. Atrapa los temidos "NaN" o Infinitos matemáticos flotantes
+            elif isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                clean_row[key] = None
+            # 3. Convierte las fechas limpias a texto simple
+            elif hasattr(val, 'strftime'):
+                clean_row[key] = val.strftime('%Y-%m-%d')
+            # 4. Deja pasar el resto de los datos sanos
+            else:
+                clean_row[key] = val
+        clean_records.append(clean_row)
         
-    return df
+    return clean_records
 
 # ==========================================
 # ENCABEZADO
@@ -167,8 +174,10 @@ with st.sidebar:
                 for sheet, table_name in tablas_map.items():
                     if sheet in xls.sheet_names:
                         df_sheet = pd.read_excel(xls, sheet_name=sheet)
-                        df_sheet = clean_df_for_supabase(df_sheet)
-                        records = df_sheet.to_dict(orient='records')
+                        
+                        # Limpieza total y forzada a diccionario
+                        records = clean_records_for_supabase(df_sheet)
+                        
                         if records:
                             supabase.table(table_name).upsert(records).execute()
                 st.success("¡Base de datos restaurada con éxito en Supabase!")
