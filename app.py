@@ -81,24 +81,22 @@ def set_capital_inicial(monto):
     supabase.table("config").upsert({"clave": "capital_inicial", "valor": float(monto)}).execute()
 
 def clean_records_for_supabase(df):
-    """Fuerza bruta para limpiar el DataFrame de cualquier NaN o error de JSON"""
-    # Convertir el dataframe a diccionarios crudos primero
+    """Fuerza bruta para limpiar el DataFrame de cualquier NaN, error de JSON y espacios vacíos"""
     raw_records = df.to_dict(orient='records')
     
     clean_records = []
     for row in raw_records:
         clean_row = {}
         for key, val in row.items():
-            # 1. Atrapa valores nulos nativos de Pandas (NaT, nulos, etc)
             if pd.isna(val):
                 clean_row[key] = None
-            # 2. Atrapa los temidos "NaN" o Infinitos matemáticos flotantes
             elif isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
                 clean_row[key] = None
-            # 3. Convierte las fechas limpias a texto simple
             elif hasattr(val, 'strftime'):
                 clean_row[key] = val.strftime('%Y-%m-%d')
-            # 4. Deja pasar el resto de los datos sanos
+            elif isinstance(val, str):
+                val_limpio = val.strip()
+                clean_row[key] = val_limpio if val_limpio != "" else None
             else:
                 clean_row[key] = val
         clean_records.append(clean_row)
@@ -174,6 +172,17 @@ with st.sidebar:
                 for sheet, table_name in tablas_map.items():
                     if sheet in xls.sheet_names:
                         df_sheet = pd.read_excel(xls, sheet_name=sheet)
+                        
+                        # BLINDAJE ANTI-DUPLICADOS: Elimina filas fantasma y registros repetidos
+                        if 'id_personalizado' in df_sheet.columns:
+                            df_sheet = df_sheet.dropna(subset=['id_personalizado'])
+                            df_sheet = df_sheet.drop_duplicates(subset=['id_personalizado'], keep='last')
+                        elif 'id' in df_sheet.columns:
+                            df_sheet = df_sheet.dropna(subset=['id'])
+                            df_sheet = df_sheet.drop_duplicates(subset=['id'], keep='last')
+                        else:
+                            df_sheet = df_sheet.dropna(how='all')
+                            df_sheet = df_sheet.drop_duplicates()
                         
                         # Limpieza total y forzada a diccionario
                         records = clean_records_for_supabase(df_sheet)
